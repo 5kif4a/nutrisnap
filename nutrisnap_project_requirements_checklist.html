@@ -1,0 +1,288 @@
+
+<h2 class="sr-only">Interactive project requirements checklist for NutriSnap</h2>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+.section { margin-bottom: 2rem; }
+.section-header {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  padding: 12px 16px; border-radius: var(--border-radius-lg);
+  background: var(--color-background-secondary);
+  border: 0.5px solid var(--color-border-tertiary);
+  transition: background 0.15s;
+}
+.section-header:hover { background: var(--color-background-tertiary); }
+.section-header .weight {
+  font-size: 12px; padding: 2px 10px; border-radius: var(--border-radius-md);
+  font-weight: 500; white-space: nowrap;
+}
+.w-crit { background: var(--color-background-danger); color: var(--color-text-danger); }
+.w-rec { background: var(--color-background-info); color: var(--color-text-info); }
+.w-doc { background: var(--color-background-warning); color: var(--color-text-warning); }
+.section-title { font-size: 16px; font-weight: 500; flex: 1; }
+.chevron { font-size: 14px; color: var(--color-text-tertiary); transition: transform 0.2s; }
+.chevron.open { transform: rotate(90deg); }
+.section-body { padding: 12px 0 0 0; display: none; }
+.section-body.open { display: block; }
+.item {
+  border: 0.5px solid var(--color-border-tertiary);
+  border-radius: var(--border-radius-lg);
+  margin-bottom: 10px; overflow: hidden;
+}
+.item-header {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 12px 16px; cursor: pointer;
+}
+.item-header:hover { background: var(--color-background-secondary); }
+.cb { width: 18px; height: 18px; border-radius: 4px; border: 1.5px solid var(--color-border-secondary);
+  flex-shrink: 0; margin-top: 2px; display: flex; align-items: center; justify-content: center;
+  font-size: 12px; color: transparent; transition: all 0.15s; cursor: pointer; }
+.cb.checked { background: #1D9E75; border-color: #1D9E75; color: #fff; }
+.item-title { font-size: 14px; font-weight: 500; }
+.item-sub { font-size: 13px; color: var(--color-text-secondary); margin-top: 2px; }
+.item-detail {
+  padding: 0 16px 14px 44px; font-size: 13px; line-height: 1.65;
+  color: var(--color-text-secondary); display: none;
+}
+.item-detail.open { display: block; }
+.tag { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: var(--border-radius-md);
+  margin-right: 4px; margin-top: 4px; }
+.tag-tech { background: var(--color-background-info); color: var(--color-text-info); }
+.tag-idea { background: #E1F5EE; color: #0F6E56; }
+.progress-bar { height: 6px; background: var(--color-background-tertiary); border-radius: 3px; margin-top: 8px; overflow: hidden; }
+.progress-fill { height: 100%; background: #1D9E75; border-radius: 3px; transition: width 0.3s; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 1.5rem; }
+.stat { background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 12px 16px; }
+.stat-label { font-size: 12px; color: var(--color-text-secondary); }
+.stat-val { font-size: 22px; font-weight: 500; margin-top: 2px; }
+</style>
+
+<div class="stats">
+  <div class="stat"><div class="stat-label">Обязательные</div><div class="stat-val" id="s-req">0 / 10</div></div>
+  <div class="stat"><div class="stat-label">Рекомендуемые</div><div class="stat-val" id="s-rec">0 / 6</div></div>
+  <div class="stat"><div class="stat-label">Артефакты</div><div class="stat-val" id="s-doc">0 / 5</div></div>
+  <div class="stat"><div class="stat-label">Прогресс</div><div class="stat-val" id="s-pct">0%</div></div>
+</div>
+<div class="progress-bar"><div class="progress-fill" id="pbar" style="width:0%"></div></div>
+
+<div id="sections" style="margin-top: 1.5rem;"></div>
+
+<script>
+const data = [
+  { title: "3.1 Архитектура и оркестрация", weight: "40% оценки", wclass: "w-crit", items: [
+    { id: "orch", title: "LangGraph workflow с ветвлениями",
+      sub: "Многошаговый граф обработки еды",
+      detail: `<b>Как реализовать:</b> LangGraph граф с нодами:<br>
+      1. <b>input_router</b> — определяет тип ввода (фото / текст / голос)<br>
+      2. <b>vision_node</b> — GPT-4o Vision анализирует фото еды → список продуктов<br>
+      3. <b>text_parser</b> — LLM парсит текст "200г куриной грудки и рис"<br>
+      4. <b>nutrition_lookup</b> — поиск КБЖУ через FatSecret API / RAG<br>
+      5. <b>confirm_node</b> — human-in-the-loop: показать юзеру результат, он подтверждает или правит<br>
+      6. <b>save_node</b> — сохранение в БД<br><br>
+      <b>Ветвление:</b> фото → vision, текст → parser, голос → STT → parser<br>
+      <b>Цикл:</b> если юзер правит — назад в lookup<br>
+      <span class="tag tag-tech">LangGraph</span><span class="tag tag-tech">FastAPI</span><span class="tag tag-tech">Python</span>` },
+    { id: "mcp", title: "MCP-сервер с 2-3 tool'ами",
+      sub: "Nutrition MCP Server",
+      detail: `<b>Tool'ы MCP-сервера:</b><br>
+      1. <b>search_food</b> — поиск продукта по названию, возвращает КБЖУ на 100г<br>
+      2. <b>log_meal</b> — записать приём пищи (продукт, вес, время, тип приёма)<br>
+      3. <b>get_daily_summary</b> — получить сводку за день (калории, БЖУ, прогресс к цели)<br><br>
+      <b>Почему MCP, а не обычный API:</b> MCP позволяет агенту самому решать какой tool вызвать в зависимости от контекста. Юзер пишет "запиши завтрак" — агент сам вызывает log_meal. Пишет "сколько я съел сегодня" — вызывает get_daily_summary.<br>
+      <span class="tag tag-tech">MCP SDK</span><span class="tag tag-tech">FastAPI</span><span class="tag tag-tech">FatSecret API</span>` },
+    { id: "skill", title: "Skill с SKILL.md",
+      sub: "Nutrition tracking skill для Claude",
+      detail: `<b>Структура:</b><br>
+      <code>nutrition-tracker/</code><br>
+      <code>├── SKILL.md</code> — триггеры: "посчитай калории", "запиши еду", "что я ел сегодня"<br>
+      <code>├── references/</code> — таблица популярных казахстанских продуктов с КБЖУ<br>
+      <code>└── scripts/</code> — скрипт нормализации порций<br><br>
+      <b>Когда Skill полезнее промпта:</b> Skill содержит локальную базу продуктов КЗ (бешбармак, баурсаки, курт) которых нет в FatSecret.<br>
+      <span class="tag tag-tech">SKILL.md</span><span class="tag tag-idea">KZ продукты</span>` },
+  ]},
+  { title: "3.2 Работа с данными", weight: "обязательно", wclass: "w-crit", items: [
+    { id: "rag", title: "RAG-пайплайн",
+      sub: "База знаний о продуктах и нутриентах",
+      detail: `<b>Источники данных:</b> таблицы USDA, FatSecret dumps, казахстанские продукты<br><br>
+      <b>Выбор компонентов:</b><br>
+      — <b>Chunking:</b> по продукту (1 chunk = 1 продукт с описанием, КБЖУ, альтернативными названиями)<br>
+      — <b>Embeddings:</b> text-embedding-3-small (дешёвый, достаточный для коротких chunks)<br>
+      — <b>Vector DB:</b> Qdrant (self-hosted, бесплатный, хороший фильтр по metadata)<br>
+      — <b>Reranker:</b> Cohere rerank для точного матчинга "куриная грудка" vs "куриное филе"<br><br>
+      <b>Зачем RAG:</b> FatSecret API не знает казахские блюда. RAG дополняет API локальной базой.<br>
+      <span class="tag tag-tech">Qdrant</span><span class="tag tag-tech">OpenAI Embeddings</span><span class="tag tag-tech">Cohere Rerank</span>` },
+    { id: "docs", title: "Обработка документов / скрапинг",
+      sub: "Парсинг таблиц КБЖУ и скрапинг food-сайтов",
+      detail: `<b>Варианты:</b><br>
+      1. Парсинг PDF/Excel таблиц USDA с нутриентами<br>
+      2. Скрапинг calorizator.ru / fatsecret.com для пополнения базы<br>
+      3. Парсинг HTML-рецептов с сайтов для расчёта КБЖУ блюда<br><br>
+      <b>Инструменты:</b> BeautifulSoup / Playwright для скрапинга, unstructured для PDF<br>
+      <span class="tag tag-tech">BeautifulSoup</span><span class="tag tag-tech">Playwright</span><span class="tag tag-tech">unstructured</span>` },
+    { id: "multi", title: "Мультимодальность",
+      sub: "Фото еды → распознавание → КБЖУ",
+      detail: `<b>Главный сценарий:</b> юзер фоткает тарелку → Vision модель определяет блюдо и примерный вес → агент ищет КБЖУ → предлагает результат<br><br>
+      <b>Почему это осмысленно, а не "для галочки":</b> это ядро продукта. Вся боль FatSecret — ручной поиск и ввод. Фото решает проблему в один тап.<br><br>
+      <b>Дополнительно:</b> голосовой ввод через Whisper — "записал двести грамм творога на завтрак"<br>
+      <span class="tag tag-tech">GPT-4o Vision</span><span class="tag tag-tech">Whisper</span><span class="tag tag-idea">core feature</span>` },
+  ]},
+  { title: "3.3 Мониторинг и оценка", weight: "обязательно", wclass: "w-crit", items: [
+    { id: "logs", title: "LangSmith / Langfuse трейсинг",
+      sub: "Логирование всех LLM-вызовов",
+      detail: `<b>Реализация:</b> Langfuse (self-hosted, бесплатный) или LangSmith<br><br>
+      <b>Что логировать:</b><br>
+      — Каждый вызов Vision модели (фото → что распознал)<br>
+      — RAG retrieval (какие chunks достал, какой score)<br>
+      — Финальный ответ агента<br>
+      — Латентность каждого шага графа<br>
+      — Стоимость в токенах<br><br>
+      <b>На защите:</b> показать дашборд с реальными трейсами — "вот юзер отправил фото плова, вот что Vision увидел, вот какие chunks достались из RAG"<br>
+      <span class="tag tag-tech">Langfuse</span><span class="tag tag-tech">LangSmith</span>` },
+    { id: "evals", title: "Golden dataset 30+ примеров + 2 метрики",
+      sub: "Оценка качества распознавания и КБЖУ",
+      detail: `<b>Golden dataset (30+ примеров):</b><br>
+      — 15 фото еды с эталонным КБЖУ (проверено вручную)<br>
+      — 10 текстовых описаний ("200г гречки с курицей") с эталоном<br>
+      — 5 edge cases (смешанные блюда, нестандартные порции, KZ еда)<br><br>
+      <b>Метрики:</b><br>
+      1. <b>Accuracy распознавания</b> — совпадение определённого блюда с эталоном<br>
+      2. <b>MAPE калорий</b> — средняя абсолютная процентная ошибка калорий vs эталон<br>
+      3. <b>LLM-as-judge</b> — GPT-4o оценивает полноту и адекватность ответа (1-5)<br>
+      <span class="tag tag-tech">pytest</span><span class="tag tag-tech">RAGAS</span>` },
+    { id: "ab", title: "A/B эксперимент",
+      sub: "Сравнение конфигураций",
+      detail: `<b>Гипотеза:</b> "GPT-4o mini с detailed-промптом даёт сравнимое качество распознавания еды с GPT-4o, но в 10x дешевле"<br><br>
+      <b>Вариант A:</b> GPT-4o Vision, температура 0.1<br>
+      <b>Вариант B:</b> GPT-4o-mini Vision, температура 0.1, расширенный промпт<br><br>
+      <b>Метрики:</b> accuracy, MAPE калорий, latency, cost per request<br>
+      <b>Прогон:</b> 30 примеров из golden dataset через оба варианта<br>
+      <span class="tag tag-idea">cost optimization</span>` },
+  ]},
+  { title: "3.4 Гиперпараметры", weight: "обязательно", wclass: "w-crit", items: [
+    { id: "llm", title: "Обоснованный выбор LLM и параметров",
+      sub: "Почему эта модель, температура, max_tokens",
+      detail: `<b>Выбор модели:</b><br>
+      — <b>Vision:</b> GPT-4o (лучшее качество Vision) или GPT-4o-mini (если A/B покажет достаточное качество)<br>
+      — <b>Text parsing:</b> GPT-4o-mini (простая задача, дешёвый)<br>
+      — <b>RAG synthesis:</b> GPT-4o-mini<br><br>
+      <b>Параметры:</b><br>
+      — temperature: 0.0-0.1 (нужен детерминизм, не креатив)<br>
+      — max_tokens: 500 (ответ структурированный, JSON, не длинный)<br>
+      — top_p: 1.0 (при низкой temperature не критично)<br><br>
+      <b>Обоснование:</b> показать таблицу "модель | качество | latency | cost/req" из A/B теста<br>
+      <span class="tag tag-tech">GPT-4o</span><span class="tag tag-tech">GPT-4o-mini</span>` },
+  ]},
+  { title: "4. Рекомендуемые (бонусы)", weight: "+10%", wclass: "w-rec", items: [
+    { id: "guard", title: "Guardrails",
+      sub: "Фильтрация нерелевантных запросов",
+      detail: `Простая реализация: если юзер пишет не про еду — вежливо отказать. Output guard: проверка что КБЖУ в разумных диапазонах (не 50000 ккал на порцию).<br><span class="tag tag-tech">NeMo Guardrails</span>` },
+    { id: "cache", title: "Semantic cache",
+      sub: "Кэш частых продуктов",
+      detail: `"Куриная грудка 200г" спрашивают 100 раз в день — кэшировать результат. Redis + embedding similarity > 0.95 → отдать из кэша.<br><span class="tag tag-tech">Redis</span>` },
+    { id: "docker", title: "Docker + docker-compose",
+      sub: "Однокомандный запуск",
+      detail: `docker-compose: FastAPI backend + Qdrant + Redis + Langfuse. Одна команда — всё поднимается.<br><span class="tag tag-tech">Docker</span>` },
+    { id: "deploy", title: "Деплой на публичный URL",
+      sub: "Railway / Render для бэкенда",
+      detail: `Backend на Railway, Telegram Mini App — статика. Бот через webhook.<br><span class="tag tag-tech">Railway</span>` },
+    { id: "realapi", title: "Интеграция с реальными API",
+      sub: "FatSecret API + Telegram Bot API",
+      detail: `FatSecret OAuth 1.0 (у тебя уже есть опыт), Telegram Bot API для Mini App.<br><span class="tag tag-tech">FatSecret</span><span class="tag tag-tech">Telegram</span>` },
+    { id: "users", title: "Реальные пользователи",
+      sub: "Дать друзьям потестить",
+      detail: `Раздать бота 5-10 людям на неделю до защиты. Собрать фидбэк: что удобно, что нет, какие блюда не распознало.<br><span class="tag tag-idea">user research</span>` },
+  ]},
+  { title: "5. Артефакты сдачи", weight: "документы", wclass: "w-doc", items: [
+    { id: "repo", title: "GitHub репозиторий + README",
+      sub: "Полный код, инструкция, скриншоты",
+      detail: `README: описание проекта, архитектура, стек, скриншоты Mini App, ссылка на бота, инструкция запуска (docker-compose up).<br><span class="tag tag-tech">GitHub</span>` },
+    { id: "arch", title: "ARCHITECTURE.md / mindmap",
+      sub: "Диаграмма архитектуры системы",
+      detail: `Excalidraw или Mermaid: User → Telegram → Bot Backend → LangGraph → (Vision / RAG / FatSecret MCP) → Response → Telegram<br><span class="tag tag-tech">Excalidraw</span>` },
+    { id: "evalsmd", title: "EVALS.md",
+      sub: "Golden dataset + метрики + A/B результаты",
+      detail: `Файл с: описанием golden dataset, таблицей метрик по итерациям, результатами A/B эксперимента, выводами и решениями.<br><span class="tag tag-tech">Markdown</span>` },
+    { id: "pres", title: "Презентация 10-15 слайдов",
+      sub: "Проблема → решение → демо → архитектура → метрики",
+      detail: `Структура: 1) Боль FatSecret 2) Решение — фото/текст/голос в 1 тап 3) Live demo 4) Архитектура 5) LangGraph граф 6) MCP + Skill 7) RAG 8) Метрики + A/B 9) Выводы<br><span class="tag tag-tech">Google Slides</span>` },
+    { id: "demo", title: "Рабочее демо",
+      sub: "Живой бот или локальный запуск",
+      detail: `Задеплоенный Telegram бот, который можно открыть прямо на защите и показать live: сфоткать еду → получить КБЖУ.<br><span class="tag tag-idea">live demo</span>` },
+  ]},
+];
+
+const root = document.getElementById('sections');
+let checks = {};
+
+function render() {
+  root.innerHTML = '';
+  let reqDone = 0, reqTotal = 0, recDone = 0, recTotal = 0, docDone = 0, docTotal = 0;
+
+  data.forEach((sec, si) => {
+    const div = document.createElement('div');
+    div.className = 'section';
+
+    const isReq = sec.wclass === 'w-crit';
+    const isRec = sec.wclass === 'w-rec';
+    const isDoc = sec.wclass === 'w-doc';
+
+    let secChecked = 0;
+    sec.items.forEach(it => { if (checks[it.id]) secChecked++; });
+
+    div.innerHTML = `
+      <div class="section-header" data-sec="${si}">
+        <span class="weight ${sec.wclass}">${sec.weight}</span>
+        <span class="section-title">${sec.title}</span>
+        <span style="font-size:13px;color:var(--color-text-secondary)">${secChecked}/${sec.items.length}</span>
+        <span class="chevron" id="chev-${si}">&#9654;</span>
+      </div>
+      <div class="section-body" id="body-${si}">
+        ${sec.items.map(it => {
+          if (isReq) reqTotal++;
+          if (isRec) recTotal++;
+          if (isDoc) docTotal++;
+          if (checks[it.id]) { if(isReq) reqDone++; if(isRec) recDone++; if(isDoc) docDone++; }
+          return `<div class="item">
+            <div class="item-header" data-item="${it.id}">
+              <div class="cb ${checks[it.id]?'checked':''}" data-check="${it.id}">${checks[it.id]?'&#10003;':''}</div>
+              <div style="flex:1"><div class="item-title">${it.title}</div><div class="item-sub">${it.sub}</div></div>
+            </div>
+            <div class="item-detail" id="det-${it.id}">${it.detail}</div>
+          </div>`;
+        }).join('')}
+      </div>
+    `;
+    root.appendChild(div);
+
+    div.querySelector('.section-header').onclick = () => {
+      const b = document.getElementById('body-'+si);
+      const c = document.getElementById('chev-'+si);
+      b.classList.toggle('open');
+      c.classList.toggle('open');
+    };
+
+    div.querySelectorAll('.item-header').forEach(ih => {
+      ih.onclick = (e) => {
+        if (e.target.closest('.cb')) {
+          const id = e.target.closest('.cb').dataset.check;
+          checks[id] = !checks[id];
+          render();
+          return;
+        }
+        const id = ih.dataset.item;
+        document.getElementById('det-'+id).classList.toggle('open');
+      };
+    });
+  });
+
+  const total = reqTotal + recTotal + docTotal;
+  const done = reqDone + recDone + docDone;
+  document.getElementById('s-req').textContent = reqDone + ' / ' + reqTotal;
+  document.getElementById('s-rec').textContent = recDone + ' / ' + recTotal;
+  document.getElementById('s-doc').textContent = docDone + ' / ' + docTotal;
+  const pct = total ? Math.round(done/total*100) : 0;
+  document.getElementById('s-pct').textContent = pct + '%';
+  document.getElementById('pbar').style.width = pct + '%';
+}
+
+render();
+</script>
