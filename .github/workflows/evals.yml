@@ -1,0 +1,78 @@
+name: Evals
+
+on:
+  pull_request:
+    paths:
+      - 'backend/app/**'
+      - 'backend/app/evals/**'
+      - '.github/workflows/evals.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.5.0"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run golden dataset evals
+        run: uv run python -m app.evals.run --output results.json
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LANGCHAIN_API_KEY: ${{ secrets.LANGCHAIN_API_KEY }}
+          LANGCHAIN_TRACING_V2: "true"
+          LANGCHAIN_PROJECT: nutrisnap-evals-ci
+
+      - name: Upload results artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results-${{ github.event.pull_request.number || github.sha }}
+          path: backend/results.json
+
+      - name: Comment PR with metrics
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const r = JSON.parse(fs.readFileSync('backend/results.json', 'utf8'));
+            const body = [
+              '## 📊 Eval Results',
+              '',
+              '| Metric | Value |',
+              '|---|---|',
+              `| Accuracy | ${r.accuracy.toFixed(3)} |`,
+              `| MAPE калорий | ${r.mape_kcal.toFixed(1)}% |`,
+              `| LLM-as-judge | ${r.llm_judge.toFixed(2)} / 5 |`,
+              `| Latency p50 | ${r.latency_p50_ms} ms |`,
+              `| Latency p95 | ${r.latency_p95_ms} ms |`,
+              `| Cost / req | $${r.cost_per_req.toFixed(4)} |`,
+              `| Examples | ${r.n_examples} |`,
+              '',
+              `_Run: ${context.runId}_`,
+            ].join('\n');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            });

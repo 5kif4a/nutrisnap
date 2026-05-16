@@ -1,0 +1,33 @@
+# Virtualenvs and caches
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Secrets — never copy into image
+.env
+.env.*
+!.env.example
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# Dev tooling
+.git/
+.gitignore
+.github/
+tests/
+docs/
+README.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
