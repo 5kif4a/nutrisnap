@@ -81,7 +81,7 @@ flowchart LR
     miniapp[📱 Mini App<br/>React + Vite]
     bot[🤖 PTB Webhook<br/>via FastAPI]
     api[⚡ FastAPI]
-    graph[🔀 LangGraph]
+    langgraph[🔀 LangGraph]
     vision[🖼 GPT-4o Vision]
     whisper[🎙 Whisper STT]
     parser[📝 GPT-4o-mini]
@@ -96,16 +96,16 @@ flowchart LR
     user -.->|opens| miniapp
     miniapp -->|X-Init-Data auth| api
     bot --> api
-    api --> graph
-    graph --> vision
-    graph --> whisper
-    graph --> parser
-    graph --> mcp
+    api --> langgraph
+    langgraph --> vision
+    langgraph --> whisper
+    langgraph --> parser
+    langgraph --> mcp
     mcp --> pg
     mcp --> qdrant
     mcp --> off
     mcp -.fallback.-> fs
-    graph -.traces.-> langsmith
+    langgraph -.traces.-> langsmith
 ```
 
 ### Поток обработки фото

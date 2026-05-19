@@ -63,7 +63,7 @@ flowchart LR
     user[User in Telegram]
     bot[PTB Webhook]
     api[FastAPI]
-    graph[LangGraph]
+    langgraph[LangGraph]
     mcp[MCP Nutrition Server]
     rag[Qdrant RAG]
     pg[(PostgreSQL)]
@@ -76,11 +76,11 @@ flowchart LR
 
     user -->|photo/voice/text| bot
     bot --> api
-    api --> graph
-    graph --> vision
-    graph --> whisper
-    graph --> parser
-    graph --> mcp
+    api --> langgraph
+    langgraph --> vision
+    langgraph --> whisper
+    langgraph --> parser
+    langgraph --> mcp
     mcp --> pg
     mcp --> rag
     mcp --> off
