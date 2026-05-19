@@ -11,15 +11,15 @@ logger = logging.getLogger(__name__)
 
 
 async def analyze_photo_node(state: GraphState) -> GraphState:
-    image = state.get("photo_bytes")
-    if not image:
+    images = state.get("photo_bytes_list") or []
+    if not images:
         state["error"] = "no photo bytes in state"
         state["parsed_items"] = []
         return state
 
     caption = state.get("caption") or None
     try:
-        result = await analyze_photo_meal(image, caption=caption)
+        result = await analyze_photo_meal(images, caption=caption)
     except Exception as exc:
         logger.exception("Vision analysis failed")
         state["error"] = f"vision failed: {exc.__class__.__name__}"

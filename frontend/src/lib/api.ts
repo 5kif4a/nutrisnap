@@ -22,6 +22,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await res.text().catch(() => "");
     throw new Error(`API ${res.status}: ${body || res.statusText}`);
   }
+  if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 
@@ -39,4 +40,7 @@ export const api = {
 
   getMonth: (month?: string) =>
     request<MonthResponse>(`/api/month${month ? `?month=${month}` : ""}`),
+
+  deleteMeal: (id: string) =>
+    request<void>(`/api/meal/${id}`, { method: "DELETE" }),
 };

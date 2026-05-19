@@ -8,6 +8,9 @@ export default defineConfig({
   server: {
     host: true,
     port: 5173,
+    // Allow ngrok tunnels so the Telegram Mini App can load the dev server
+    // over https. `.ngrok-free.app` matches any subdomain on the free tier.
+    allowedHosts: [".ngrok-free.app", ".ngrok.io"],
     proxy: {
       "/api": {
         target: "http://localhost:8000",

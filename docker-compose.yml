@@ -1,11 +1,16 @@
-# Local development stack — uses fixed image versions for reproducibility.
-# In production Railway builds the API from backend/Dockerfile directly and
-# runs `alembic upgrade head` via its Pre-Deploy Command.
+# Production-style stack — no hot-reload, no source bind-mounts, no dev tooling.
+# Use this when running NutriSnap on a single VPS or for production-like smoke tests.
 #
-# Run:        podman compose up -d        (or `docker compose up -d` if you have docker)
-# Logs:       podman compose logs -f api bot
-# Stop:       podman compose down
-# Reset DB:   podman compose down -v       (-v wipes named volumes)
+# In Railway production: API is built from backend/Dockerfile directly and
+# `alembic upgrade head` runs as a Pre-Deploy Command — this file is NOT used.
+#
+# For day-to-day local development use docker-compose.dev.yml instead
+# (it adds hot-reload and a pgweb DB viewer on http://localhost:8081).
+#
+# Run:        docker compose up -d
+# Logs:       docker compose logs -f api bot
+# Stop:       docker compose down
+# Reset DB:   docker compose down -v       (-v wipes named volumes)
 #
 # Migration flow:
 #   postgres becomes healthy
@@ -22,8 +27,7 @@ services:
       POSTGRES_USER: nutrisnap
       POSTGRES_PASSWORD: nutrisnap
       POSTGRES_DB: nutrisnap
-    ports:
-      - "5432:5432"
+    # No host port exposure in prod — only reachable inside the compose network.
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -36,13 +40,9 @@ services:
   qdrant:
     image: docker.io/qdrant/qdrant:v1.12.4
     container_name: nutrisnap-qdrant
-    ports:
-      - "6333:6333"   # HTTP API
-      - "6334:6334"   # gRPC API
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:
-      # Qdrant doesn't ship curl/wget — use bash /dev/tcp probe instead.
       test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/6333' 2>/dev/null"]
       interval: 10s
       timeout: 5s
@@ -51,8 +51,6 @@ services:
     restart: unless-stopped
 
   migrate:
-    # Runs alembic migrations once on `compose up`, then exits.
-    # Both `api` and `bot` wait for this to complete successfully before starting.
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -64,8 +62,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    # Override the default HEALTHCHECK + ENTRYPOINT-style CMD from Dockerfile.
-    # tini still wraps the process (ENTRYPOINT) for clean exits.
     command: alembic upgrade head
     healthcheck:
       disable: true
@@ -81,22 +77,15 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      # Inside compose-network these names resolve to the service IPs.
       DATABASE_URL: postgresql+asyncpg://nutrisnap:nutrisnap@postgres:5432/nutrisnap
       QDRANT_URL: http://qdrant:6333
-      # Empty in dev → API won't register a Telegram webhook on startup.
-      # Set this on Railway to register webhook on deploy.
-      WEBHOOK_BASE_URL: ""
+      # Set WEBHOOK_BASE_URL via .env to register the Telegram webhook on startup.
     depends_on:
       migrate:
         condition: service_completed_successfully
       qdrant:
         condition: service_healthy
-    volumes:
-      - ./backend/app:/app/app:ro
-      - ./backend/alembic:/app/alembic:ro
-      - ./backend/alembic.ini:/app/alembic.ini:ro
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     healthcheck:
       test: ["CMD", "python", "/app/scripts/healthcheck.py"]
       interval: 15s
@@ -106,8 +95,8 @@ services:
     restart: unless-stopped
 
   bot:
-    # In dev we run the bot as a separate polling worker.
-    # In prod (Railway) we don't need this service — webhook hits the API directly.
+    # Separate polling worker. Skip this service if you register the Telegram
+    # webhook against `api` instead (set WEBHOOK_BASE_URL).
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -117,27 +106,13 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://nutrisnap:nutrisnap@postgres:5432/nutrisnap
       QDRANT_URL: http://qdrant:6333
-      # Podman/Docker bind mounts on macOS don't reliably propagate inotify
-      # events through the host→VM→container boundary, so force polling.
-      WATCHFILES_FORCE_POLLING: "true"
     depends_on:
       migrate:
         condition: service_completed_successfully
       qdrant:
         condition: service_healthy
-    volumes:
-      - ./backend/app:/app/app:ro
-    # watchfiles wraps the bot — restarts the python process whenever a .py
-    # file under /app/app changes (api already does this via uvicorn --reload).
-    command:
-      - watchfiles
-      - --filter
-      - python
-      - python -m app.bot.run_polling
-      - /app/app
+    command: python -m app.bot.run_polling
     healthcheck:
-      # No HTTP port — scan /proc for the run_polling python process.
-      # Slim Python image doesn't ship pgrep/ps, so we use a tiny script.
       test: ["CMD", "python", "/app/scripts/healthcheck_bot.py"]
       interval: 30s
       timeout: 3s

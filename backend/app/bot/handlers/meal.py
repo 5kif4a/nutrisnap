@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 
@@ -22,6 +23,12 @@ from app.repositories.user_repo import (
 )
 from app.services.meal_drafts import MealDraft, pop_draft, stash_draft
 from app.services.meal_type_inference import infer_meal_type_by_clock
+from app.services.photo_buffer import (
+    ALBUM_DEBOUNCE_SEC,
+    append_photo,
+    attach_thinking_message,
+    drain,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,31 +36,104 @@ logger = logging.getLogger(__name__)
 async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_message is None or update.effective_user is None:
         return
-    if not update.effective_message.photo:
+    msg = update.effective_message
+    if not msg.photo:
+        return
+    if not await _require_onboarded(update):
         return
 
-    thinking = await update.effective_message.reply_text("🔍 Анализирую фото...")
+    photo_bytes = await _download_largest_photo(msg)
+    caption = msg.caption or ""
 
-    # Download highest-resolution photo.
-    photo = update.effective_message.photo[-1]
+    if msg.media_group_id is None:
+        # Single photo — process immediately.
+        thinking = await msg.reply_text("🔍 Анализирую фото...")
+        state = {
+            "raw_input_type": "photo",
+            "photo_bytes_list": [photo_bytes],
+            "caption": caption,
+            "telegram_user_id": update.effective_user.id,
+            "tg_message_id": update.update_id,
+        }
+        await _run_graph_and_reply(update, context, state, thinking, source=InputSource.PHOTO)
+        return
+
+    # Album — buffer this photo. Only the first photo of a media_group
+    # schedules the flush coroutine; subsequent photos just append.
+    is_first, _ = await append_photo(
+        user_id=update.effective_user.id,
+        media_group_id=msg.media_group_id,
+        chat_id=msg.chat_id,
+        tg_message_id=update.update_id,
+        photo_bytes=photo_bytes,
+        caption=caption,
+    )
+    if not is_first:
+        return
+
+    thinking = await msg.reply_text("🔍 Анализирую альбом...")
+    await attach_thinking_message(
+        user_id=update.effective_user.id,
+        media_group_id=msg.media_group_id,
+        message_id=thinking.message_id,
+    )
+    asyncio.create_task(
+        _flush_album_after_delay(
+            context=context,
+            user_id=update.effective_user.id,
+            media_group_id=msg.media_group_id,
+        )
+    )
+
+
+async def _download_largest_photo(msg) -> bytes:
+    """Download the highest-resolution PhotoSize from a Telegram message."""
+    photo = msg.photo[-1]
     photo_file = await photo.get_file()
-    buffer = io.BytesIO()
-    await photo_file.download_to_memory(out=buffer)
+    buf = io.BytesIO()
+    await photo_file.download_to_memory(out=buf)
+    return buf.getvalue()
 
+
+async def _flush_album_after_delay(
+    *,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    media_group_id: str,
+) -> None:
+    """Drain the album buffer after the debounce and feed the graph once."""
+    await asyncio.sleep(ALBUM_DEBOUNCE_SEC)
+    album = await drain(user_id=user_id, media_group_id=media_group_id)
+    if album is None or not album.photos:
+        return
+
+    caption = " | ".join(album.captions) if album.captions else ""
     state = {
         "raw_input_type": "photo",
-        "photo_bytes": buffer.getvalue(),
-        "caption": update.effective_message.caption or "",
-        "telegram_user_id": update.effective_user.id,
-        "tg_message_id": update.update_id,
+        "photo_bytes_list": album.photos,
+        "caption": caption,
+        "telegram_user_id": user_id,
+        "tg_message_id": album.first_tg_message_id,
     }
-    await _run_graph_and_reply(update, context, state, thinking, source=InputSource.PHOTO)
+
+    await _run_graph_and_post(
+        context=context,
+        telegram_user_id=user_id,
+        chat_id=album.chat_id,
+        thinking_msg_id=album.thinking_msg_id,
+        state=state,
+        source=InputSource.PHOTO,
+        raw_input=caption or None,
+        tg_message_id=album.first_tg_message_id,
+    )
 
 
 async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_message is None or update.effective_user is None:
         return
     if not update.effective_message.voice:
+        return
+    if not await _require_onboarded(update):
         return
 
     thinking = await update.effective_message.reply_text("🎙 Транскрибирую...")
@@ -78,6 +158,8 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     text = update.effective_message.text or ""
     if not text or text.startswith("/"):
+        return
+    if not await _require_onboarded(update):
         return
 
     is_forward = update.effective_message.forward_origin is not None
@@ -153,6 +235,20 @@ async def handle_cancel_meal_callback(update: Update, context: ContextTypes.DEFA
     await query.edit_message_text("✖️ Отменено")
 
 
+async def _require_onboarded(update: Update) -> bool:
+    """Block meal input until the user has completed /start onboarding (has TDEE)."""
+    if update.effective_user is None or update.effective_message is None:
+        return False
+    async with async_session_factory() as session:
+        user = await upsert_user_from_telegram(session, update.effective_user)
+    if user.is_onboarded:
+        return True
+    await update.effective_message.reply_text(
+        "👋 Сначала давай рассчитаем твою суточную норму КБЖУ — нажми /start"
+    )
+    return False
+
+
 async def _run_graph_and_reply(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -164,40 +260,91 @@ async def _run_graph_and_reply(
     """Invoke the meal graph, stash draft, edit the 'thinking' bubble with result."""
     if update.effective_user is None or update.effective_message is None:
         return
+    await _run_graph_and_post(
+        context=context,
+        telegram_user_id=update.effective_user.id,
+        chat_id=thinking_message.chat_id,
+        thinking_msg_id=thinking_message.message_id,
+        state=state,
+        source=source,
+        raw_input=state.get("text_input") or state.get("caption") or None,
+        tg_message_id=state.get("tg_message_id"),
+    )
 
-    # Ensure user exists in DB so we can attach the meal.
+
+async def _run_graph_and_post(
+    *,
+    context: ContextTypes.DEFAULT_TYPE,
+    telegram_user_id: int,
+    chat_id: int,
+    thinking_msg_id: int | None,
+    state: dict,
+    source: InputSource,
+    raw_input: str | None,
+    tg_message_id: int | None,
+) -> None:
+    """Shared graph-runner. Edits a previously-sent thinking bubble with the result."""
+    # Ensure the user exists in DB so we can attach the meal.
     async with async_session_factory() as session:
-        await upsert_user_from_telegram(session, update.effective_user)
+        user = await get_user_by_tg_id(session, telegram_user_id)
+        if user is None:
+            await _safe_edit(context, chat_id, thinking_msg_id, "⚠️ Сначала /start")
+            return
+        state.setdefault("user_id", str(user.id))
 
     try:
         graph = get_meal_graph()
         result = await graph.ainvoke(state)
     except Exception as exc:
         logger.exception("Graph invocation failed")
-        await thinking_message.edit_text(f"⚠️ Ошибка обработки: {exc.__class__.__name__}")
+        await _safe_edit(
+            context, chat_id, thinking_msg_id,
+            f"⚠️ Ошибка обработки: {exc.__class__.__name__}",
+        )
         return
 
     response_text = result.get("response_text", "(empty response)")
     resolved = result.get("resolved_items") or []
 
     if not resolved:
-        # Off-topic / unresolved / error — just send the message, no keyboard.
-        await thinking_message.edit_text(response_text)
+        await _safe_edit(context, chat_id, thinking_msg_id, response_text)
         return
 
     items: list[MealItemPayload] = [r["payload"] for r in resolved]
     draft = MealDraft(
-        user_telegram_id=update.effective_user.id,
+        user_telegram_id=telegram_user_id,
         items=items,
         source=source,
-        raw_input=state.get("text_input") or state.get("caption") or None,
-        tg_message_id=state.get("tg_message_id"),
+        raw_input=raw_input,
+        tg_message_id=tg_message_id,
         eaten_at=infer_meal_type_and_time(),
     )
     draft_id = await stash_draft(draft)
 
-    keyboard = build_meal_type_keyboard(draft_id)
-    await thinking_message.edit_text(response_text, reply_markup=keyboard)
+    keyboard = build_meal_type_keyboard(
+        draft_id, with_recipe_option=(source == InputSource.PHOTO)
+    )
+    await _safe_edit(context, chat_id, thinking_msg_id, response_text, reply_markup=keyboard)
+
+
+async def _safe_edit(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    message_id: int | None,
+    text: str,
+    reply_markup=None,
+) -> None:
+    """Edit the thinking bubble, or send a new message if the id was lost."""
+    if message_id is not None:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id, message_id=message_id,
+                text=text, reply_markup=reply_markup,
+            )
+            return
+        except Exception:
+            logger.warning("edit_message_text failed; falling back to send", exc_info=True)
+    await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
 
 
 def infer_meal_type_and_time():

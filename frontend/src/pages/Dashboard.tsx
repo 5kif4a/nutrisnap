@@ -1,4 +1,5 @@
 import { Button } from "@telegram-apps/telegram-ui";
+import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { CircularProgress } from "../components/CircularProgress";
 import { MacroBar } from "../components/MacroBar";
@@ -34,6 +35,14 @@ export function Dashboard({ date, onDateChange }: Props) {
     load(date);
   }, [date, load]);
 
+  const handleDelete = useCallback(
+    async (id: string) => {
+      await api.deleteMeal(id);
+      await load(date);
+    },
+    [date, load],
+  );
+
   const shiftDay = (delta: number) => onDateChange(shiftDayISO(date, delta));
 
   const isToday = date === todayISO();
@@ -44,17 +53,19 @@ export function Dashboard({ date, onDateChange }: Props) {
       <div className="mb-4 flex items-center justify-between">
         <button
           onClick={() => shiftDay(-1)}
-          className="rounded-full bg-tg-card px-3 py-1.5 text-tg-text shadow-sm"
+          aria-label="Предыдущий день"
+          className="flex h-9 w-9 items-center justify-center rounded-full bg-tg-card text-tg-text shadow-sm"
         >
-          ‹
+          <ChevronLeft size={20} />
         </button>
         <span className="font-semibold text-tg-text">{humanDate(date)}</span>
         <button
           onClick={() => shiftDay(1)}
           disabled={isToday}
-          className="rounded-full bg-tg-card px-3 py-1.5 text-tg-text shadow-sm disabled:opacity-30"
+          aria-label="Следующий день"
+          className="flex h-9 w-9 items-center justify-center rounded-full bg-tg-card text-tg-text shadow-sm disabled:opacity-30"
         >
-          ›
+          <ChevronRight size={20} />
         </button>
       </div>
 
@@ -108,13 +119,21 @@ export function Dashboard({ date, onDateChange }: Props) {
                 Нет записей за этот день.
               </div>
             ) : (
-              data.meals.map((m) => <MealCard key={m.id} meal={m} />)
+              data.meals.map((m) => (
+                <MealCard key={m.id} meal={m} onDelete={handleDelete} />
+              ))
             )}
           </div>
 
           <div className="mt-5">
-            <Button size="l" stretched mode="filled" onClick={closeToBot}>
-              + Добавить приём пищи
+            <Button
+              size="l"
+              stretched
+              mode="filled"
+              onClick={closeToBot}
+              before={<Plus size={18} />}
+            >
+              Добавить приём пищи
             </Button>
           </div>
         </>

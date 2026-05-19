@@ -1,4 +1,10 @@
 import { Tabbar } from "@telegram-apps/telegram-ui";
+import {
+  CalendarDays,
+  LayoutDashboard,
+  User,
+  type LucideIcon,
+} from "lucide-react";
 
 export type Tab = "dashboard" | "calendar" | "profile";
 
@@ -7,23 +13,23 @@ interface Props {
   onChange: (tab: Tab) => void;
 }
 
-const TABS: { id: Tab; label: string; icon: string }[] = [
-  { id: "dashboard", label: "Сегодня", icon: "📊" },
-  { id: "calendar", label: "Календарь", icon: "📅" },
-  { id: "profile", label: "Профиль", icon: "👤" },
+const TABS: { id: Tab; label: string; Icon: LucideIcon }[] = [
+  { id: "dashboard", label: "Сегодня", Icon: LayoutDashboard },
+  { id: "calendar", label: "Календарь", Icon: CalendarDays },
+  { id: "profile", label: "Профиль", Icon: User },
 ];
 
 export function TabBar({ active, onChange }: Props) {
   return (
     <Tabbar>
-      {TABS.map((t) => (
+      {TABS.map(({ id, label, Icon }) => (
         <Tabbar.Item
-          key={t.id}
-          text={t.label}
-          selected={active === t.id}
-          onClick={() => onChange(t.id)}
+          key={id}
+          text={label}
+          selected={active === id}
+          onClick={() => onChange(id)}
         >
-          <span style={{ fontSize: 22, lineHeight: "28px" }}>{t.icon}</span>
+          <Icon size={22} strokeWidth={2} />
         </Tabbar.Item>
       ))}
     </Tabbar>

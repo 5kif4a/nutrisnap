@@ -1,0 +1,183 @@
+# Local development stack with hot-reload and DB viewer.
+#
+# Differences from docker-compose.yml:
+#   * `api`, `bot` mount ./backend/app as read-only volumes and run under
+#     uvicorn --reload / watchfiles → restart on code change.
+#   * `pgweb` is included as a web UI for Postgres (http://localhost:8081).
+#
+# Run:        docker compose -f docker-compose.dev.yml up -d
+# Logs:       docker compose -f docker-compose.dev.yml logs -f api bot
+# Stop:       docker compose -f docker-compose.dev.yml down
+# Reset DB:   docker compose -f docker-compose.dev.yml down -v
+#
+# Migration flow:
+#   postgres becomes healthy
+#     ↓
+#   `migrate` service runs `alembic upgrade head` and exits 0
+#     ↓
+#   `api` and `bot` start (gated on `service_completed_successfully`)
+
+services:
+  postgres:
+    image: docker.io/library/postgres:16.4-alpine
+    container_name: nutrisnap-postgres
+    environment:
+      POSTGRES_USER: nutrisnap
+      POSTGRES_PASSWORD: nutrisnap
+      POSTGRES_DB: nutrisnap
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nutrisnap"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  pgweb:
+    # Lightweight web UI for Postgres — http://localhost:8081
+    # Auto-connects via PGWEB_DATABASE_URL, no manual server setup.
+    image: docker.io/sosedoff/pgweb:0.16.2
+    container_name: nutrisnap-pgweb
+    ports:
+      - "8081:8081"
+    environment:
+      PGWEB_DATABASE_URL: postgres://nutrisnap:nutrisnap@postgres:5432/nutrisnap?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  qdrant:
+    image: docker.io/qdrant/qdrant:v1.12.4
+    container_name: nutrisnap-qdrant
+    ports:
+      - "6333:6333"   # HTTP API
+      - "6334:6334"   # gRPC API
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      # Qdrant doesn't ship curl/wget — use bash /dev/tcp probe instead.
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/6333' 2>/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  migrate:
+    # Runs alembic migrations once on `compose up`, then exits.
+    # Both `api` and `bot` wait for this to complete successfully before starting.
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: nutrisnap-migrate
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://nutrisnap:nutrisnap@postgres:5432/nutrisnap
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: alembic upgrade head
+    healthcheck:
+      disable: true
+    restart: "no"
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: nutrisnap-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://nutrisnap:nutrisnap@postgres:5432/nutrisnap
+      QDRANT_URL: http://qdrant:6333
+      # Empty in dev → API won't register a Telegram webhook on startup.
+      WEBHOOK_BASE_URL: ""
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      qdrant:
+        condition: service_healthy
+    volumes:
+      - ./backend/app:/app/app:ro
+      - ./backend/alembic:/app/alembic:ro
+      - ./backend/alembic.ini:/app/alembic.ini:ro
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/healthcheck.py"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  bot:
+    # In dev we run the bot as a separate polling worker.
+    # In prod (Railway) we don't need this service — webhook hits the API directly.
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: nutrisnap-bot
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://nutrisnap:nutrisnap@postgres:5432/nutrisnap
+      QDRANT_URL: http://qdrant:6333
+      # Podman/Docker bind mounts on macOS don't reliably propagate inotify
+      # events through the host→VM→container boundary, so force polling.
+      WATCHFILES_FORCE_POLLING: "true"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      qdrant:
+        condition: service_healthy
+    volumes:
+      - ./backend/app:/app/app:ro
+    # watchfiles wraps the bot — restarts the python process whenever a .py
+    # file under /app/app changes (api already does this via uvicorn --reload).
+    command:
+      - watchfiles
+      - --filter
+      - python
+      - python -m app.bot.run_polling
+      - /app/app
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/healthcheck_bot.py"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  ngrok:
+    # HTTPS tunnel to the Vite dev server running on the host (port 5173).
+    # Telegram Mini App requires https; ngrok gives us a public URL like
+    # https://xxxx.ngrok-free.app that we can drop into MINI_APP_URL.
+    #
+    # Setup (one-time):
+    #   1. Get a free authtoken at https://dashboard.ngrok.com/get-started/your-authtoken
+    #   2. Add NGROK_AUTHTOKEN=... to ./backend/.env
+    #
+    # Usage:
+    #   docker compose -f docker-compose.dev.yml up -d ngrok
+    #   open http://localhost:4040    # ngrok inspector — copy the https URL from here
+    #   # paste the https URL into backend/.env as MINI_APP_URL=... and restart the bot
+    image: docker.io/ngrok/ngrok:latest
+    container_name: nutrisnap-ngrok
+    env_file:
+      - ./backend/.env
+    command: ["http", "host.docker.internal:5173"]
+    ports:
+      - "4040:4040"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  qdrant_data:

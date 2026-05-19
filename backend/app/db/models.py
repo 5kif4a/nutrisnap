@@ -58,6 +58,7 @@ class FoodSource(StrEnum):
     OPEN_FOOD_FACTS = "off"      # OFF API (barcode / text)
     FATSECRET = "fatsecret"      # FatSecret API
     CUSTOM = "custom"            # user-generated (UGC)
+    USER_RECIPE = "user_recipe"  # cooked dish saved by user via recipe-builder flow
     LLM_ESTIMATE = "llm_estimate"  # GPT-mini fallback estimate
 
 
@@ -91,6 +92,8 @@ class User(UuidPkMixin, TimestampsMixin, Base):
     age: Mapped[int | None] = mapped_column(Integer)
     activity: Mapped[ActivityLevel | None] = mapped_column(String(16))
     goal: Mapped[Goal | None] = mapped_column(String(16))
+    # Only filled when goal is LOSE / GAIN — the weight the user wants to reach.
+    target_weight_kg: Mapped[float | None] = mapped_column()
 
     # Computed daily targets
     tdee_kcal: Mapped[int | None] = mapped_column(Integer)

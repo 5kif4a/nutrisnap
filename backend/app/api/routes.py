@@ -8,7 +8,9 @@ from __future__ import annotations
 from calendar import monthrange
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -24,9 +26,10 @@ from app.api.schemas import (
     ProfileUpdate,
     UserProfile,
 )
-from app.db.models import User
+from app.db.models import Meal, User
 from app.db.session import get_session
 from app.repositories.meal_repo import (
+    delete_meal,
     fetch_daily_summary,
     fetch_meals_for_day,
     fetch_month_day_totals,
@@ -151,6 +154,22 @@ async def get_day(
         ),
         meals=meals_out,
     )
+
+
+@router.delete("/meal/{meal_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_meal_route(
+    meal_id: UUID = Path(...),
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    meal = await session.get(Meal, meal_id)
+    if meal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="meal not found")
+    if meal.user_id != user.id:
+        # 404 instead of 403 — don't reveal that the id exists for another user.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="meal not found")
+    await delete_meal(session, meal_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/month", response_model=MonthResponse)

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from enum import IntEnum
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
@@ -27,6 +27,7 @@ from telegram.ext import (
     filters,
 )
 
+from app.core.config import settings
 from app.db.models import ActivityLevel, Goal, Sex
 from app.db.session import async_session_factory
 from app.repositories.user_repo import (
@@ -43,6 +44,8 @@ class _Step(IntEnum):
     AGE = 3
     ACTIVITY = 4
     GOAL = 5
+    # Only reached when goal is LOSE or GAIN; MAINTAIN skips straight to save.
+    TARGET_WEIGHT = 6
 
 
 _ACTIVITY_LABELS: dict[ActivityLevel, str] = {
@@ -58,6 +61,31 @@ _GOAL_LABELS: dict[Goal, str] = {
     Goal.MAINTAIN: "⚖️ Поддерживать вес",
     Goal.GAIN: "📈 Набрать массу",
 }
+
+_SEX_LABELS: dict[Sex, str] = {
+    Sex.MALE: "👨 Мужской",
+    Sex.FEMALE: "👩 Женский",
+}
+
+
+async def _mark_answered(update: Update, choice_label: str) -> None:
+    """Append the user's pick to the prompt and strip the keyboard.
+
+    Keeps the onboarding flow visible as chat history instead of overwriting
+    every step into a single edited bubble.
+    """
+    query = update.callback_query
+    if query is None or query.message is None:
+        return
+    original = query.message.text or ""
+    try:
+        await query.edit_message_text(f"{original}\n\n→ {choice_label}")
+    except Exception:
+        # If the message can't be edited (too old, etc.), at least drop the keyboard.
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
 
 
 # ─── Entry points ────────────────────────────────────────────────────────────
@@ -102,12 +130,16 @@ async def handle_sex_selection(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
     query = update.callback_query
-    if query is None or query.data is None:
+    if query is None or query.data is None or query.message is None:
         return _Step.SEX
     await query.answer()
-    sex_value = query.data.split(":", 1)[1]
-    context.user_data["onboard_sex"] = Sex(sex_value)
-    await query.edit_message_text("⚖️ Сколько ты весишь? Напиши число в кг (например 72)")
+    sex = Sex(query.data.split(":", 1)[1])
+    context.user_data["onboard_sex"] = sex
+
+    await _mark_answered(update, _SEX_LABELS[sex])
+    await query.message.reply_text(
+        "⚖️ Сколько ты весишь? Напиши число в кг (например 72)"
+    )
     return _Step.WEIGHT
 
 
@@ -168,17 +200,18 @@ async def handle_activity_selection(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
     query = update.callback_query
-    if query is None or query.data is None:
+    if query is None or query.data is None or query.message is None:
         return _Step.ACTIVITY
     await query.answer()
     activity = ActivityLevel(query.data.split(":", 1)[1])
     context.user_data["onboard_activity"] = activity
 
+    await _mark_answered(update, _ACTIVITY_LABELS[activity])
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton(label, callback_data=f"onboard_goal:{goal.value}")]
          for goal, label in _GOAL_LABELS.items()]
     )
-    await query.edit_message_text("🎯 Какая у тебя цель?", reply_markup=keyboard)
+    await query.message.reply_text("🎯 Какая у тебя цель?", reply_markup=keyboard)
     return _Step.GOAL
 
 
@@ -186,25 +219,84 @@ async def handle_goal_selection(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
     query = update.callback_query
-    if query is None or query.data is None:
+    if query is None or query.data is None or query.message is None:
         return _Step.GOAL
     await query.answer()
     goal = Goal(query.data.split(":", 1)[1])
 
-    # Pull everything from user_data and persist.
+    await _mark_answered(update, _GOAL_LABELS[goal])
+    context.user_data["onboard_goal"] = goal
+
+    # LOSE / GAIN → ask for target weight before finalizing. MAINTAIN falls
+    # through and persists immediately.
+    if goal is not Goal.MAINTAIN:
+        current_weight = context.user_data.get("onboard_weight")
+        prompt = (
+            "🎯 Какой у тебя целевой вес в кг?\n\n"
+            f"Сейчас: {current_weight:g} кг" if current_weight else "🎯 Какой у тебя целевой вес в кг?"
+        )
+        await query.message.reply_text(prompt)
+        return _Step.TARGET_WEIGHT
+
+    return await _finalize_onboarding(update, context, target_weight_kg=None)
+
+
+async def handle_target_weight_input(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    if update.effective_message is None or update.effective_message.text is None:
+        return _Step.TARGET_WEIGHT
+    target = _parse_positive_float(update.effective_message.text)
+    if target is None or not 30 <= target <= 300:
+        await update.effective_message.reply_text(
+            "Не похоже на вес. Напиши число от 30 до 300 кг."
+        )
+        return _Step.TARGET_WEIGHT
+
+    current = context.user_data.get("onboard_weight")
+    goal: Goal = context.user_data.get("onboard_goal", Goal.MAINTAIN)
+    if current is not None:
+        if goal is Goal.LOSE and target >= current:
+            await update.effective_message.reply_text(
+                f"Целевой вес должен быть меньше текущего ({current:g} кг) для цели «похудеть». "
+                "Напиши число меньше."
+            )
+            return _Step.TARGET_WEIGHT
+        if goal is Goal.GAIN and target <= current:
+            await update.effective_message.reply_text(
+                f"Целевой вес должен быть больше текущего ({current:g} кг) для цели «набрать массу». "
+                "Напиши число больше."
+            )
+            return _Step.TARGET_WEIGHT
+
+    return await _finalize_onboarding(update, context, target_weight_kg=target)
+
+
+async def _finalize_onboarding(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    target_weight_kg: float | None,
+) -> int:
+    """Persist the collected profile + send the summary message."""
+    if update.effective_user is None:
+        return ConversationHandler.END
+
     sex: Sex = context.user_data.pop("onboard_sex")
     weight: float = context.user_data.pop("onboard_weight")
     height: float = context.user_data.pop("onboard_height")
     age: int = context.user_data.pop("onboard_age")
     activity: ActivityLevel = context.user_data.pop("onboard_activity")
+    goal: Goal = context.user_data.pop("onboard_goal")
 
-    if update.effective_user is None:
-        return ConversationHandler.END
+    chat = update.effective_chat
+    chat_id = chat.id if chat is not None else None
 
     async with async_session_factory() as session:
         user = await get_user_by_tg_id(session, update.effective_user.id)
         if user is None:
-            await query.edit_message_text("⚠️ Сначала /start")
+            if chat_id is not None:
+                await context.bot.send_message(chat_id, "⚠️ Сначала /start")
             return ConversationHandler.END
         user = await save_user_profile(
             session,
@@ -215,17 +307,46 @@ async def handle_goal_selection(
             age=age,
             activity=activity,
             goal=goal,
+            target_weight_kg=target_weight_kg,
+        )
+
+    target_line = ""
+    if user.target_weight_kg is not None and user.weight_kg is not None:
+        delta = user.target_weight_kg - user.weight_kg
+        arrow = "↓" if delta < 0 else "↑"
+        target_line = (
+            f"🎯 *Цель*: {user.weight_kg:g} кг → {user.target_weight_kg:g} кг "
+            f"({arrow}{abs(delta):g} кг)\n\n"
         )
 
     summary = (
         "✅ Готово! Твоя суточная норма:\n\n"
-        f"🔥 *Калории*: {user.tdee_kcal} ккал\n"
+        + target_line
+        + f"🔥 *Калории*: {user.tdee_kcal} ккал\n"
         f"🥩 *Белки*: {user.target_protein_g} г\n"
         f"🥑 *Жиры*: {user.target_fat_g} г\n"
         f"🍞 *Углеводы*: {user.target_carbs_g} г\n\n"
-        "Теперь записывай еду — фото, голос, текст или форвард."
+        "Теперь записывай еду — фото, голос, текст или форвард.\n\n"
+        "⚙️ Параметры профиля (вес, цель, активность) и нормы можно "
+        "поменять в любой момент в Mini App."
     )
-    await query.edit_message_text(summary, parse_mode="Markdown")
+    reply_markup: InlineKeyboardMarkup | None = None
+    if settings.MINI_APP_URL.startswith("https://"):
+        reply_markup = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "📊 Открыть Mini App",
+                        web_app=WebAppInfo(url=settings.MINI_APP_URL),
+                    )
+                ]
+            ]
+        )
+
+    if chat_id is not None:
+        await context.bot.send_message(
+            chat_id=chat_id, text=summary, parse_mode="Markdown", reply_markup=reply_markup
+        )
     return ConversationHandler.END
 
 
@@ -240,6 +361,7 @@ async def cancel_onboarding(
         "onboard_height",
         "onboard_age",
         "onboard_activity",
+        "onboard_goal",
     ):
         context.user_data.pop(k, None)
     return ConversationHandler.END
@@ -248,8 +370,12 @@ async def cancel_onboarding(
 # ─── Wiring ──────────────────────────────────────────────────────────────────
 
 def build_onboarding_handler() -> ConversationHandler:
+    # Imported here to avoid a circular import (start.py imports `_Step` from this module).
+    from app.bot.handlers.start import handle_start_command
+
     return ConversationHandler(
         entry_points=[
+            CommandHandler("start", handle_start_command),
             CommandHandler("onboard", start_onboarding_command),
             CallbackQueryHandler(start_onboarding_from_button, pattern=r"^onboard$"),
         ],
@@ -271,6 +397,9 @@ def build_onboarding_handler() -> ConversationHandler:
             ],
             _Step.GOAL: [
                 CallbackQueryHandler(handle_goal_selection, pattern=r"^onboard_goal:"),
+            ],
+            _Step.TARGET_WEIGHT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_target_weight_input),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel_onboarding)],

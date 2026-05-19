@@ -49,8 +49,13 @@ async def save_user_profile(
     age: int,
     activity: ActivityLevel,
     goal: Goal,
+    target_weight_kg: float | None = None,
 ) -> User:
-    """Persist onboarding profile and recompute daily targets."""
+    """Persist onboarding profile and recompute daily targets.
+
+    `target_weight_kg` is only meaningful for LOSE / GAIN goals. For MAINTAIN
+    we ignore whatever is passed and store NULL.
+    """
     targets = compute_daily_targets(sex, weight_kg, height_cm, age, activity, goal)
 
     user.sex = sex
@@ -59,6 +64,7 @@ async def save_user_profile(
     user.age = age
     user.activity = activity
     user.goal = goal
+    user.target_weight_kg = target_weight_kg if goal is not Goal.MAINTAIN else None
     user.tdee_kcal = targets.tdee_kcal
     user.target_protein_g = targets.protein_g
     user.target_fat_g = targets.fat_g

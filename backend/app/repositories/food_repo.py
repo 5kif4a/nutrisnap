@@ -134,6 +134,44 @@ async def upsert_food_from_external(
     return food
 
 
+async def save_user_recipe(
+    session: AsyncSession,
+    *,
+    user: User,
+    name: str,
+    ingredients_total_kcal: float,
+    ingredients_total_protein_g: float,
+    ingredients_total_fat_g: float,
+    ingredients_total_carbs_g: float,
+    cooked_weight_g: float,
+    aliases: list[str] | None = None,
+) -> Food:
+    """Persist a user-cooked recipe as a `Food` row with per-100g macros.
+
+    Raw ingredient totals are normalized to the cooked dish weight. The next
+    time the user eats the same dish they just say "150 г X" and the bot
+    pulls the saved row from the local catalog without any LLM call.
+    """
+    if cooked_weight_g <= 0:
+        raise ValueError("cooked_weight_g must be positive")
+    factor = 100.0 / cooked_weight_g
+    food = Food(
+        name=name.strip(),
+        aliases=aliases or [],
+        metric=FoodMetric.GRAMS,
+        kcal=ingredients_total_kcal * factor,
+        protein_g=ingredients_total_protein_g * factor,
+        fat_g=ingredients_total_fat_g * factor,
+        carbs_g=ingredients_total_carbs_g * factor,
+        source=FoodSource.USER_RECIPE,
+        created_by_user_id=user.id,
+    )
+    session.add(food)
+    await session.commit()
+    await session.refresh(food)
+    return food
+
+
 async def list_recent_foods_per_meal_type(
     session: AsyncSession,
     user: User,

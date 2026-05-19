@@ -67,6 +67,9 @@ Rules:
     * liquids: use `ml`
     * countable single items (egg, banana, slice): use `piece` and `amount=N`
     * complete ready meals where weight is hard to estimate: use `serving`
+- If you see a kitchen scale display visible in the photo — READ the weight
+  shown on the digital display (most scales show grams) and use that as
+  `amount` exactly, with `unit=g`. This overrides visual estimation.
 - If you see a packaged product (yogurt cup, can, etc.) — try to read the brand
   and barcode if visible.
 - Output ONLY the structured result, no chit-chat.
@@ -96,23 +99,45 @@ Rules:
 
 @traceable(name="analyze_photo_meal", run_type="llm")
 async def analyze_photo_meal(
-    image_bytes: bytes,
+    images: bytes | list[bytes],
     *,
     caption: str | None = None,
 ) -> PhotoMealResult:
-    """Detect food items on a photo. Uses GPT-4o Vision with structured output."""
-    client = get_openai_client()
-    image_b64 = base64.b64encode(image_bytes).decode()
+    """Detect food items on one or more photos.
 
-    user_content: list[dict] = [
-        {
-            "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
-        }
-    ]
+    Accepts either a single bytes object or a list (Telegram album). All
+    images are sent in one Vision call so the model can de-duplicate items
+    across angles / additional photos.
+    """
+    client = get_openai_client()
+    if isinstance(images, (bytes, bytearray)):
+        images_list = [bytes(images)]
+    else:
+        images_list = list(images)
+
+    user_content: list[dict] = []
+    for img in images_list:
+        img_b64 = base64.b64encode(img).decode()
+        user_content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"},
+            }
+        )
     if caption:
         user_content.append(
             {"type": "text", "text": f"Подсказка от пользователя: {caption}"}
+        )
+    if len(images_list) > 1:
+        user_content.append(
+            {
+                "type": "text",
+                "text": (
+                    f"На фото пользователя {len(images_list)} кадра/ракурса — "
+                    "может быть один объект с разных сторон или разные блюда/ингредиенты. "
+                    "Объединяй одинаковые объекты в один item."
+                ),
+            }
         )
 
     response = await client.beta.chat.completions.parse(
