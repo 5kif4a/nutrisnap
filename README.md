@@ -144,14 +144,22 @@ sequenceDiagram
 
 ## Сервисы
 
+Docker Compose (`docker-compose.yml`):
+
 | Сервис | Что делает | Порт (локально) |
 |---|---|---|
-| `api` | FastAPI + Telegram webhook + Mini App API | 8000 |
-| `bot` | (опционально) standalone polling worker для разработки | — |
 | `postgres` | основная БД (users, meals, meal_items, foods) | 5432 |
 | `qdrant` | векторный поиск для RAG | 6333 |
+| `migrate` | прогоняет `alembic upgrade head` и завершается; `api`/`bot` ждут его | — |
+| `api` | FastAPI: `/health`, `/telegram/webhook`, Mini App API (`/api/*`) | 8000 |
+| `bot` | standalone polling worker для разработки | — |
 
-В проде `bot` запускается как webhook внутри `api` — один сервис вместо двух.
+Mini App **frontend** в Compose не входит — поднимается отдельно через Vite
+(`cd frontend && npm run dev`, порт 5173, прокси `/api` → `:8000`).
+См. [docs/MINI_APP.md](docs/MINI_APP.md).
+
+В проде `bot` запускается как webhook внутри `api` (один сервис вместо двух),
+а `migrate` — это pre-deploy команда Railway.
 
 ---
 
@@ -194,28 +202,46 @@ curl http://localhost:8000/health
 
 ```
 nutrisnap/
-├── backend/                    # FastAPI + bot + LangGraph + MCP
+├── backend/                    # FastAPI + bot + LangGraph
 │   ├── app/
-│   │   ├── main.py            # FastAPI entrypoint
+│   │   ├── main.py            # FastAPI entrypoint (/health, /telegram/webhook, /api)
 │   │   ├── core/              # config, settings
-│   │   ├── api/               # роуты Mini App
-│   │   ├── bot/               # PTB handlers
-│   │   ├── db/                # SQLAlchemy модели
-│   │   ├── graph/             # LangGraph граф
-│   │   ├── mcp/               # MCP nutrition server
-│   │   ├── rag/               # Qdrant ingest + retrieval
-│   │   ├── services/          # OFF, FatSecret, бизнес-логика
-│   │   └── evals/             # golden dataset + run.py
-│   ├── tests/
+│   │   ├── api/               # роуты Mini App (initData auth, /api/me, /api/day)
+│   │   ├── bot/               # PTB handlers (start, onboard, meal)
+│   │   ├── db/                # SQLAlchemy модели + session
+│   │   ├── graph/             # LangGraph граф + ноды
+│   │   ├── repositories/      # доступ к данным (user/meal/food repo)
+│   │   ├── services/          # OpenAI, OFF, nutrition calc/targets
+│   │   ├── mcp/               # MCP nutrition server        (планируется)
+│   │   ├── rag/               # Qdrant ingest + retrieval   (планируется)
+│   │   └── evals/             # golden dataset + run.py     (планируется)
+│   ├── alembic/               # миграции БД
+│   ├── scripts/               # healthcheck-скрипты
+│   ├── tests/                                              # (планируется)
 │   ├── Dockerfile             # multi-stage uv
-│   └── railway.json
-├── frontend/                   # React Mini App
+│   ├── railway.json
+│   ├── pyproject.toml         # uv-зависимости
+│   └── uv.lock
+├── frontend/                   # React + Vite + Tailwind Mini App
+│   ├── src/
+│   │   ├── main.tsx           # точка входа, init Telegram SDK
+│   │   ├── App.tsx            # таб-навигация
+│   │   ├── telegram.ts        # @telegram-apps/sdk-react + браузерный фолбэк
+│   │   ├── lib/api.ts         # API-клиент (X-Init-Data)
+│   │   ├── types.ts           # DTO (зеркало backend schemas)
+│   │   ├── pages/             # Dashboard, Profile
+│   │   └── components/        # CircularProgress, MacroBar, MealCard, TabBar
+│   ├── package.json
+│   ├── vite.config.ts         # dev-прокси /api → :8000
+│   └── vercel.json
 ├── docs/                       # спецификации
 │   ├── specification.md
+│   ├── MINI_APP.md            # экраны, API, локальный запуск Mini App
 │   ├── ARCHITECTURE_VARIANTS.md
 │   ├── DATABASE_CONCURRENCY.md
-│   └── NUTRITION_LOOKUP.md
-├── .github/workflows/          # CI/CD
+│   ├── NUTRITION_LOOKUP.md
+│   └── VALUE_PROPOSITION.md
+├── .github/workflows/          # CI/CD (backend, frontend, evals)
 ├── docker-compose.yml
 ├── CLAUDE.md
 └── README.md
