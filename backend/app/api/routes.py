@@ -5,6 +5,7 @@ All endpoints require a valid `X-Init-Data` header (see deps.get_current_user).
 
 from __future__ import annotations
 
+from calendar import monthrange
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -13,19 +14,41 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.api.schemas import (
     DayResponse,
+    DayStatus,
     DayTotals,
     MacroTargets,
     MealItemOut,
     MealOut,
+    MonthDay,
+    MonthResponse,
     ProfileUpdate,
     UserProfile,
 )
 from app.db.models import User
 from app.db.session import get_session
-from app.repositories.meal_repo import fetch_daily_summary, fetch_meals_for_day
+from app.repositories.meal_repo import (
+    fetch_daily_summary,
+    fetch_meals_for_day,
+    fetch_month_day_totals,
+)
 from app.repositories.user_repo import save_user_profile
 
 router = APIRouter(prefix="/api", tags=["miniapp"])
+
+# Day-colour thresholds = consumed kcal / daily target.
+GREEN_RATIO = 0.85  # ≥ → в норме
+YELLOW_RATIO = 0.50  # ≥ → немного, иначе мало
+
+
+def _day_status(kcal: float, target_kcal: int | None) -> DayStatus:
+    if not target_kcal or kcal <= 0:
+        return DayStatus.EMPTY
+    ratio = kcal / target_kcal
+    if ratio >= GREEN_RATIO:
+        return DayStatus.GREEN
+    if ratio >= YELLOW_RATIO:
+        return DayStatus.YELLOW
+    return DayStatus.RED
 
 
 def _to_profile(user: User) -> UserProfile:
@@ -127,4 +150,46 @@ async def get_day(
             carbs_g=summary.target_carbs_g,
         ),
         meals=meals_out,
+    )
+
+
+@router.get("/month", response_model=MonthResponse)
+async def get_month(
+    month_str: str = Query(
+        default="",
+        alias="month",
+        description="Month to fetch in YYYY-MM (UTC). Defaults to current month.",
+    ),
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> MonthResponse:
+    if month_str:
+        try:
+            year, month = (int(p) for p in month_str.split("-", 1))
+            date(year, month, 1)  # validate
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="month must be YYYY-MM",
+            ) from exc
+    else:
+        today = date.today()
+        year, month = today.year, today.month
+
+    totals = await fetch_month_day_totals(session, user, year, month)
+    target = user.tdee_kcal
+
+    days = [
+        MonthDay(
+            date=date(year, month, d).isoformat(),
+            kcal=totals.get(date(year, month, d), 0.0),
+            status=_day_status(totals.get(date(year, month, d), 0.0), target),
+        )
+        for d in range(1, monthrange(year, month)[1] + 1)
+    ]
+
+    return MonthResponse(
+        month=f"{year:04d}-{month:02d}",
+        target_kcal=target,
+        days=days,
     )

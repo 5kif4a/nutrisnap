@@ -170,6 +170,35 @@ async def fetch_meals_for_day(
     return list((await session.scalars(stmt)).all())
 
 
+async def fetch_month_day_totals(
+    session: AsyncSession, user: User, year: int, month: int
+) -> dict[date, float]:
+    """Sum of kcal per UTC calendar day for a month — one grouped query.
+
+    Used by the Mini App calendar to colour days without 30+ requests.
+    """
+    month_start = datetime(year, month, 1, tzinfo=timezone.utc)
+    if month == 12:
+        month_end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        month_end = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+
+    day = func.date(func.timezone("UTC", Meal.eaten_at)).label("day")
+    stmt = (
+        select(day, func.coalesce(func.sum(MealItem.kcal), 0).label("kcal"))
+        .select_from(Meal)
+        .join(MealItem, MealItem.meal_id == Meal.id)
+        .where(
+            Meal.user_id == user.id,
+            Meal.eaten_at >= month_start,
+            Meal.eaten_at < month_end,
+        )
+        .group_by(day)
+    )
+    rows = (await session.execute(stmt)).all()
+    return {r.day: float(r.kcal) for r in rows}
+
+
 async def fetch_recent_meals(
     session: AsyncSession, user: User, limit: int = 10
 ) -> list[Meal]:

@@ -1,37 +1,19 @@
+import { Button } from "@telegram-apps/telegram-ui";
 import { useCallback, useEffect, useState } from "react";
 import { CircularProgress } from "../components/CircularProgress";
 import { MacroBar } from "../components/MacroBar";
 import { MealCard } from "../components/MealCard";
 import { api } from "../lib/api";
+import { humanDate, shiftDayISO, todayISO } from "../lib/date";
 import { closeToBot } from "../telegram";
 import type { DayResponse } from "../types";
 
-// All day math is done in UTC so it stays consistent regardless of the
-// browser timezone and aligns with the backend (/api/day uses UTC day bounds).
-
-function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
+interface Props {
+  date: string;
+  onDateChange: (iso: string) => void;
 }
 
-function shiftISO(iso: string, delta: number): string {
-  const d = new Date(`${iso}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + delta);
-  return d.toISOString().slice(0, 10);
-}
-
-function humanDate(iso: string): string {
-  if (iso === todayISO()) return "Сегодня";
-  if (iso === shiftISO(todayISO(), -1)) return "Вчера";
-  return new Date(`${iso}T00:00:00Z`).toLocaleDateString("ru", {
-    day: "numeric",
-    month: "long",
-    weekday: "short",
-    timeZone: "UTC",
-  });
-}
-
-export function Dashboard() {
-  const [date, setDate] = useState(todayISO());
+export function Dashboard({ date, onDateChange }: Props) {
   const [data, setData] = useState<DayResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -52,13 +34,12 @@ export function Dashboard() {
     load(date);
   }, [date, load]);
 
-  const shiftDay = (delta: number) =>
-    setDate((cur) => shiftISO(cur, delta));
+  const shiftDay = (delta: number) => onDateChange(shiftDayISO(date, delta));
 
   const isToday = date === todayISO();
 
   return (
-    <div className="mx-auto max-w-md px-4 pb-24 pt-4">
+    <div className="mx-auto max-w-md px-4 pb-28 pt-4">
       {/* Date navigation */}
       <div className="mb-4 flex items-center justify-between">
         <button
@@ -130,15 +111,14 @@ export function Dashboard() {
               data.meals.map((m) => <MealCard key={m.id} meal={m} />)
             )}
           </div>
+
+          <div className="mt-5">
+            <Button size="l" stretched mode="filled" onClick={closeToBot}>
+              + Добавить приём пищи
+            </Button>
+          </div>
         </>
       ) : null}
-
-      <button
-        onClick={closeToBot}
-        className="fixed inset-x-0 bottom-16 mx-auto mb-2 block w-[calc(100%-2rem)] max-w-md rounded-2xl bg-tg-button py-3 font-semibold text-tg-button-text shadow-lg"
-      >
-        + Добавить приём пищи
-      </button>
     </div>
   );
 }

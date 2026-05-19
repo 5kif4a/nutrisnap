@@ -77,3 +77,17 @@ export interface DayResponse {
   targets: MacroTargets;
   meals: MealOut[];
 }
+
+export type DayStatus = "green" | "yellow" | "red" | "empty";
+
+export interface MonthDay {
+  date: string;
+  kcal: number;
+  status: DayStatus;
+}
+
+export interface MonthResponse {
+  month: string; // YYYY-MM
+  target_kcal: number | null;
+  days: MonthDay[];
+}

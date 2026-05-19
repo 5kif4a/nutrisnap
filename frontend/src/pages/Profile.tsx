@@ -1,3 +1,11 @@
+import {
+  Button,
+  Input,
+  List,
+  SegmentedControl,
+  Section,
+  Select,
+} from "@telegram-apps/telegram-ui";
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { greetingName } from "../telegram";
@@ -19,12 +27,9 @@ const ACTIVITY_OPTS: { v: ActivityLevel; label: string }[] = [
 
 const GOAL_OPTS: { v: Goal; label: string }[] = [
   { v: "lose", label: "📉 Похудеть" },
-  { v: "maintain", label: "⚖️ Держать вес" },
+  { v: "maintain", label: "⚖️ Вес" },
   { v: "gain", label: "📈 Набрать" },
 ];
-
-const FIELD =
-  "w-full rounded-xl border border-tg-border bg-tg-bg px-3 py-2.5 text-tg-text outline-none";
 
 export function Profile() {
   const [form, setForm] = useState<ProfileUpdate>({
@@ -79,85 +84,66 @@ export function Profile() {
       setForm((f) => ({ ...f, [k]: Number(e.target.value) }));
 
   return (
-    <div className="mx-auto max-w-md px-4 pb-24 pt-4">
-      <h1 className="mb-1 text-xl font-bold text-tg-text">
-        Привет, {greetingName()} 👋
-      </h1>
-      <p className="mb-5 text-sm text-tg-hint">
-        Параметры для расчёта суточной нормы КБЖУ.
-      </p>
-
-      {profile?.targets.kcal && (
-        <div className="mb-5 grid grid-cols-4 gap-2 rounded-2xl bg-tg-card p-4 text-center shadow-sm">
-          {[
-            ["🔥", profile.targets.kcal, "ккал"],
-            ["🥩", profile.targets.protein_g, "Б"],
-            ["🥑", profile.targets.fat_g, "Ж"],
-            ["🍞", profile.targets.carbs_g, "У"],
-          ].map(([icon, val, lbl]) => (
-            <div key={lbl as string}>
-              <div className="text-lg">{icon as string}</div>
-              <div className="font-bold text-tg-text">{val as number}</div>
-              <div className="text-xs text-tg-hint">{lbl as string}</div>
+    <div className="mx-auto max-w-md pb-24">
+      <List>
+        <Section
+          header={`Привет, ${greetingName()} 👋`}
+          footer="Параметры для расчёта суточной нормы КБЖУ (Mifflin-St Jeor)."
+        >
+          {profile?.targets.kcal && (
+            <div className="grid grid-cols-4 gap-2 px-4 py-3 text-center">
+              {[
+                ["🔥", profile.targets.kcal, "ккал"],
+                ["🥩", profile.targets.protein_g, "Б"],
+                ["🥑", profile.targets.fat_g, "Ж"],
+                ["🍞", profile.targets.carbs_g, "У"],
+              ].map(([icon, val, lbl]) => (
+                <div key={lbl as string}>
+                  <div className="text-lg">{icon as string}</div>
+                  <div className="font-bold text-tg-text">{val as number}</div>
+                  <div className="text-xs text-tg-hint">{lbl as string}</div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      )}
+          )}
+        </Section>
 
-      <div className="space-y-4 rounded-2xl bg-tg-card p-4 shadow-sm">
-        <div>
-          <label className="mb-1 block text-sm text-tg-hint">Пол</label>
-          <div className="flex gap-2">
-            {(["male", "female"] as Sex[]).map((s) => (
-              <button
-                key={s}
-                onClick={() => setForm((f) => ({ ...f, sex: s }))}
-                className={`flex-1 rounded-xl py-2.5 text-sm font-medium ${
-                  form.sex === s
-                    ? "bg-tg-button text-tg-button-text"
-                    : "border border-tg-border text-tg-text"
-                }`}
-              >
-                {s === "male" ? "👨 Мужской" : "👩 Женский"}
-              </button>
-            ))}
+        <Section header="Параметры">
+          <div className="px-4 pt-3">
+            <SegmentedControl>
+              {(["male", "female"] as Sex[]).map((s) => (
+                <SegmentedControl.Item
+                  key={s}
+                  selected={form.sex === s}
+                  onClick={() => setForm((f) => ({ ...f, sex: s }))}
+                >
+                  {s === "male" ? "👨 Мужской" : "👩 Женский"}
+                </SegmentedControl.Item>
+              ))}
+            </SegmentedControl>
           </div>
-        </div>
 
-        <div className="grid grid-cols-3 gap-2">
-          <div>
-            <label className="mb-1 block text-sm text-tg-hint">Вес, кг</label>
-            <input
-              type="number"
-              className={FIELD}
-              value={form.weight_kg}
-              onChange={num("weight_kg")}
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-sm text-tg-hint">Рост, см</label>
-            <input
-              type="number"
-              className={FIELD}
-              value={form.height_cm}
-              onChange={num("height_cm")}
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-sm text-tg-hint">Возраст</label>
-            <input
-              type="number"
-              className={FIELD}
-              value={form.age}
-              onChange={num("age")}
-            />
-          </div>
-        </div>
+          <Input
+            type="number"
+            header="Вес, кг"
+            value={form.weight_kg}
+            onChange={num("weight_kg")}
+          />
+          <Input
+            type="number"
+            header="Рост, см"
+            value={form.height_cm}
+            onChange={num("height_cm")}
+          />
+          <Input
+            type="number"
+            header="Возраст"
+            value={form.age}
+            onChange={num("age")}
+          />
 
-        <div>
-          <label className="mb-1 block text-sm text-tg-hint">Активность</label>
-          <select
-            className={FIELD}
+          <Select
+            header="Активность"
             value={form.activity}
             onChange={(e) =>
               setForm((f) => ({
@@ -171,46 +157,43 @@ export function Profile() {
                 {o.label}
               </option>
             ))}
-          </select>
-        </div>
+          </Select>
 
-        <div>
-          <label className="mb-1 block text-sm text-tg-hint">Цель</label>
-          <div className="flex gap-2">
-            {GOAL_OPTS.map((o) => (
-              <button
-                key={o.v}
-                onClick={() => setForm((f) => ({ ...f, goal: o.v }))}
-                className={`flex-1 rounded-xl py-2.5 text-xs font-medium ${
-                  form.goal === o.v
-                    ? "bg-tg-button text-tg-button-text"
-                    : "border border-tg-border text-tg-text"
-                }`}
-              >
-                {o.label}
-              </button>
-            ))}
+          <div className="px-4 py-3">
+            <SegmentedControl>
+              {GOAL_OPTS.map((o) => (
+                <SegmentedControl.Item
+                  key={o.v}
+                  selected={form.goal === o.v}
+                  onClick={() => setForm((f) => ({ ...f, goal: o.v }))}
+                >
+                  {o.label}
+                </SegmentedControl.Item>
+              ))}
+            </SegmentedControl>
           </div>
-        </div>
-      </div>
+        </Section>
 
-      {error && (
-        <div className="mt-4 rounded-xl bg-red-100 p-3 text-sm text-red-700">
-          {error}
-        </div>
-      )}
+        {error && (
+          <div className="mx-4 rounded-xl bg-red-100 p-3 text-sm text-red-700">
+            {error}
+          </div>
+        )}
 
-      <button
-        onClick={save}
-        disabled={status === "saving"}
-        className="mt-5 w-full rounded-2xl bg-tg-button py-3 font-semibold text-tg-button-text shadow-lg disabled:opacity-50"
-      >
-        {status === "saving"
-          ? "Сохраняю…"
-          : status === "saved"
-            ? "✓ Сохранено"
-            : "Сохранить и пересчитать норму"}
-      </button>
+        <div className="px-4 py-2">
+          <Button
+            size="l"
+            stretched
+            mode="filled"
+            loading={status === "saving"}
+            onClick={save}
+          >
+            {status === "saved"
+              ? "✓ Сохранено"
+              : "Сохранить и пересчитать норму"}
+          </Button>
+        </div>
+      </List>
     </div>
   );
 }

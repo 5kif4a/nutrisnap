@@ -1,6 +1,7 @@
 import { getInitData } from "../telegram";
 import type {
   DayResponse,
+  MonthResponse,
   ProfileUpdate,
   UserProfile,
 } from "../types";
@@ -35,4 +36,7 @@ export const api = {
 
   getDay: (date?: string) =>
     request<DayResponse>(`/api/day${date ? `?date=${date}` : ""}`),
+
+  getMonth: (month?: string) =>
+    request<MonthResponse>(`/api/month${month ? `?month=${month}` : ""}`),
 };

@@ -45,9 +45,12 @@
 - Подсчёт суточных норм калорий, белков, жиров, углеводов
 
 ### Mini App
-- Дашборд / Календарь / Профиль / Мои блюда (UGC)
-- Авторизация через Telegram `initData` (без отдельного логина)
-- UI компоненты из `@telegram-apps/telegram-ui` под нативную тему Telegram
+- **Сегодня** — кольцо калорий, бары Б/Ж/У, приёмы пищи за день, навигация по датам
+- **Календарь** — месячная сетка с цветовой индикацией дней (зелёный/жёлтый/красный по доле дневной нормы), тап по дню → детальная статистика
+- **Профиль** — пол/вес/рост/возраст/активность/цель → пересчёт нормы (Mifflin-St Jeor)
+- Мои блюда (UGC) — _планируется_
+- Авторизация через Telegram `initData` (без отдельного логина), браузерный фолбэк для локального теста
+- React + Vite + Tailwind; нативные компоненты `@telegram-apps/telegram-ui`, мост/тема через `@telegram-apps/sdk-react`
 
 ---
 
@@ -64,7 +67,7 @@
 | Embeddings | text-embedding-3-small |
 | Trace | LangSmith |
 | MCP | Python MCP SDK — Nutrition server (search_food, log_meal, get_daily_summary, lookup_by_barcode) |
-| Frontend | React 18 + Vite + TypeScript + Tailwind + shadcn/ui |
+| Frontend | React 18 + Vite + TypeScript + Tailwind |
 | Mini App | @telegram-apps/sdk-react, @telegram-apps/telegram-ui |
 | Backend deploy | Railway (api + postgres + qdrant) |
 | Frontend deploy | Vercel |
@@ -206,7 +209,7 @@ nutrisnap/
 │   ├── app/
 │   │   ├── main.py            # FastAPI entrypoint (/health, /telegram/webhook, /api)
 │   │   ├── core/              # config, settings
-│   │   ├── api/               # роуты Mini App (initData auth, /api/me, /api/day)
+│   │   ├── api/               # роуты Mini App (initData auth, /api/me, /api/day, /api/month)
 │   │   ├── bot/               # PTB handlers (start, onboard, meal)
 │   │   ├── db/                # SQLAlchemy модели + session
 │   │   ├── graph/             # LangGraph граф + ноды
@@ -228,8 +231,9 @@ nutrisnap/
 │   │   ├── App.tsx            # таб-навигация
 │   │   ├── telegram.ts        # @telegram-apps/sdk-react + браузерный фолбэк
 │   │   ├── lib/api.ts         # API-клиент (X-Init-Data)
+│   │   ├── lib/date.ts        # UTC date/month утилиты
 │   │   ├── types.ts           # DTO (зеркало backend schemas)
-│   │   ├── pages/             # Dashboard, Profile
+│   │   ├── pages/             # Dashboard, Calendar, Profile
 │   │   └── components/        # CircularProgress, MacroBar, MealCard, TabBar
 │   ├── package.json
 │   ├── vite.config.ts         # dev-прокси /api → :8000

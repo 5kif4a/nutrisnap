@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -78,3 +79,22 @@ class DayResponse(BaseModel):
     totals: DayTotals
     targets: MacroTargets
     meals: list[MealOut]
+
+
+class DayStatus(StrEnum):
+    GREEN = "green"    # в норме (kcal близко к цели)
+    YELLOW = "yellow"  # немного (заметно ниже цели)
+    RED = "red"        # мало (сильно ниже цели)
+    EMPTY = "empty"    # нет записей / нет нормы
+
+
+class MonthDay(BaseModel):
+    date: str  # YYYY-MM-DD
+    kcal: float
+    status: DayStatus
+
+
+class MonthResponse(BaseModel):
+    month: str  # YYYY-MM
+    target_kcal: int | None
+    days: list[MonthDay]
