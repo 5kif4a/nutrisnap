@@ -237,15 +237,34 @@ uv run alembic revision --autogenerate -m "msg"
 uv run alembic upgrade head
 ```
 
-### Frontend
+### Frontend (Mini App)
+
+Сначала должен быть поднят backend (API на `:8000`) — см. шаги выше
+(`docker compose up -d --build postgres migrate api`). Vite в dev-режиме
+проксирует `/api` → `http://localhost:8000`.
+
 ```bash
 cd frontend
-npm install
-npm run dev
-npm run typecheck
-npm run lint
-npm run build
+npm install        # установить зависимости (один раз)
+npm run dev        # dev-сервер → http://localhost:5173
 ```
+
+Открой **http://localhost:5173** в браузере. Вне Telegram `X-Init-Data`
+пустой → backend в `ENV=development` подставляет dev-юзера, поэтому Mini App
+работает без Telegram. Чтобы открыть внутри Telegram, нужен HTTPS (деплой —
+см. `docs/MINI_APP.md`).
+
+Прочие команды:
+```bash
+npm run typecheck  # tsc --noEmit
+npm run lint       # eslint
+npm run build      # tsc + vite build → dist/
+npm run preview    # предпросмотр прод-сборки
+```
+
+> Dev-сервер должен работать постоянно, пока тестируешь Mini App.
+> Остановить: `pkill -f vite`. Подробности по экранам и API —
+> `docs/MINI_APP.md`.
 
 ### Evals
 ```bash

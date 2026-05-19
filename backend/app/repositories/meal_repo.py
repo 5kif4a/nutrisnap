@@ -151,6 +151,25 @@ async def fetch_daily_summary(
     )
 
 
+async def fetch_meals_for_day(
+    session: AsyncSession, user: User, day: date
+) -> list[Meal]:
+    """All meals (with items) for a UTC calendar day, ordered by time."""
+    day_start = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
+    day_end = day_start + timedelta(days=1)
+    stmt = (
+        select(Meal)
+        .where(
+            Meal.user_id == user.id,
+            Meal.eaten_at >= day_start,
+            Meal.eaten_at < day_end,
+        )
+        .order_by(Meal.eaten_at)
+        .options(selectinload(Meal.items))
+    )
+    return list((await session.scalars(stmt)).all())
+
+
 async def fetch_recent_meals(
     session: AsyncSession, user: User, limit: int = 10
 ) -> list[Meal]:

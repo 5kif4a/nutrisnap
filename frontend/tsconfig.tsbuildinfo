@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/telegram.ts","./src/types.ts","./src/vite-env.d.ts","./src/components/circularprogress.tsx","./src/components/macrobar.tsx","./src/components/mealcard.tsx","./src/components/tabbar.tsx","./src/lib/api.ts","./src/pages/dashboard.tsx","./src/pages/profile.tsx"],"errors":true,"version":"5.9.3"}

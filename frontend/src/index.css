@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Fallbacks; overwritten at runtime by telegram.ts applyTheme(). */
+  --tg-bg: #f4f4f5;
+  --tg-card: #ffffff;
+  --tg-text: #0f172a;
+  --tg-hint: #94a3b8;
+  --tg-link: #3b82f6;
+  --tg-button: #3b82f6;
+  --tg-button-text: #ffffff;
+  --tg-border: #e5e7eb;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--tg-bg);
+  color: var(--tg-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
