@@ -20,7 +20,7 @@ COPY pyproject.toml uv.lock ./
 
 # --no-install-project: install only deps, not the app itself.
 # --no-dev: skip dev tools (ruff, pytest) for a leaner runtime image.
-RUN --mount=type=cache,target=/root/.cache/uv \
+RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev
 
 # ─── Stage 2: runtime ──────────────────────────────────────────────
