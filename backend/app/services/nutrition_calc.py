@@ -7,7 +7,7 @@ from app.db.models import Food, FoodMetric
 
 @dataclass(slots=True)
 class NutritionPayload:
-    weight_g: float        # canonical equivalent in grams
+    weight_g: float  # canonical equivalent in grams
     kcal: float
     protein_g: float
     fat_g: float

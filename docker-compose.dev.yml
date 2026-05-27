@@ -3,7 +3,7 @@
 # Differences from docker-compose.yml:
 #   * `api`, `bot` mount ./backend/app as read-only volumes and run under
 #     uvicorn --reload / watchfiles → restart on code change.
-#   * `pgweb` is included as a web UI for Postgres (http://localhost:8081).
+#   * `pgadmin` is included as a web UI for Postgres (http://localhost:8081).
 #
 # Run:        docker compose -f docker-compose.dev.yml up -d
 # Logs:       docker compose -f docker-compose.dev.yml logs -f api bot
@@ -36,15 +36,23 @@ services:
       retries: 10
     restart: unless-stopped
 
-  pgweb:
-    # Lightweight web UI for Postgres — http://localhost:8081
-    # Auto-connects via PGWEB_DATABASE_URL, no manual server setup.
-    image: docker.io/sosedoff/pgweb:0.16.2
-    container_name: nutrisnap-pgweb
+  pgadmin:
+    # Web UI for Postgres — http://localhost:8081
+    # Login: admin@nutrisnap.com / nutrisnap
+    # Server pre-registered via servers.json; password is entered once on
+    # first connect and then cached inside the pgadmin_data volume.
+    image: docker.io/dpage/pgadmin4:8.14
+    container_name: nutrisnap-pgadmin
     ports:
-      - "8081:8081"
+      - "8081:80"
     environment:
-      PGWEB_DATABASE_URL: postgres://nutrisnap:nutrisnap@postgres:5432/nutrisnap?sslmode=disable
+      PGADMIN_DEFAULT_EMAIL: admin@nutrisnap.com
+      PGADMIN_DEFAULT_PASSWORD: nutrisnap
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./.pgadmin/servers.json:/pgadmin4/servers.json:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -181,3 +189,4 @@ services:
 volumes:
   postgres_data:
   qdrant_data:
+  pgadmin_data:

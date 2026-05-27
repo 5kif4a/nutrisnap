@@ -16,9 +16,9 @@ logger = logging.getLogger("nutrisnap")
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(fastapi_app: FastAPI):
     telegram_app = build_telegram_application()
-    app.state.telegram_app = telegram_app
+    fastapi_app.state.telegram_app = telegram_app
 
     await telegram_app.initialize()
     await telegram_app.start()
@@ -76,7 +76,9 @@ async def handle_telegram_webhook(
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ) -> dict[str, bool]:
     if x_telegram_bot_api_secret_token != settings.WEBHOOK_SECRET:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="invalid secret")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="invalid secret"
+        )
 
     payload = await request.json()
     telegram_app = request.app.state.telegram_app

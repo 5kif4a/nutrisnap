@@ -27,6 +27,11 @@ class MealDraft:
     raw_input: str | None
     tg_message_id: int | None
     eaten_at: datetime
+    # Quick-add candidates shown alongside meal-type buttons. Each entry is a
+    # ready-to-append MealItemPayload (food the user often eats at this time).
+    # Indexed by their position in this list for the `qadd:<draft_id>:<idx>`
+    # callback — keeps the callback payload under Telegram's 64-byte limit.
+    quick_add_pool: list[MealItemPayload] = field(default_factory=list)
     expires_at: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc) + timedelta(minutes=30)
     )
@@ -49,6 +54,25 @@ async def pop_draft(draft_id: str) -> MealDraft | None:
     async with _lock:
         _evict_expired_locked()
         return _drafts.pop(draft_id, None)
+
+
+async def peek_draft(draft_id: str) -> MealDraft | None:
+    """Read a draft without removing it (used by quick-add callbacks)."""
+    async with _lock:
+        _evict_expired_locked()
+        return _drafts.get(draft_id)
+
+
+async def append_to_draft(draft_id: str, item: MealItemPayload) -> MealDraft | None:
+    """Atomically append an item to the draft. Returns the updated draft or None
+    if the draft has expired/been consumed."""
+    async with _lock:
+        _evict_expired_locked()
+        draft = _drafts.get(draft_id)
+        if draft is None:
+            return None
+        draft.items.append(item)
+        return draft
 
 
 def _evict_expired_locked() -> None:

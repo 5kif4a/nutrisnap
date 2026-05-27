@@ -27,7 +27,9 @@ class DailyTargets:
     carbs_g: int
 
 
-def compute_bmr_mifflin(sex: Sex, weight_kg: float, height_cm: float, age: int) -> float:
+def compute_bmr_mifflin(
+    sex: Sex, weight_kg: float, height_cm: float, age: int
+) -> float:
     """Mifflin-St Jeor basal metabolic rate (kcal/day)."""
     base = 10 * weight_kg + 6.25 * height_cm - 5 * age
     return base + (5 if sex is Sex.MALE else -161)

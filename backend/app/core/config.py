@@ -15,10 +15,14 @@ class Settings(BaseSettings):
     BOT_TOKEN: str
     MINI_APP_URL: str = "http://localhost:5173"
     WEBHOOK_SECRET: str = "dev-secret-change-me"
-    WEBHOOK_BASE_URL: str | None = None  # public URL of the API (Railway) — needed to register webhook
+    WEBHOOK_BASE_URL: str | None = (
+        None  # public URL of the API (Railway) — needed to register webhook
+    )
 
     # Database
-    DATABASE_URL: str = "postgresql+asyncpg://nutrisnap:nutrisnap@localhost:5432/nutrisnap"
+    DATABASE_URL: str = (
+        "postgresql+asyncpg://nutrisnap:nutrisnap@localhost:5432/nutrisnap"
+    )
 
     # OpenAI
     OPENAI_API_KEY: str
@@ -34,9 +38,13 @@ class Settings(BaseSettings):
     LANGCHAIN_API_KEY: str | None = None
     LANGCHAIN_PROJECT: str = "nutrisnap"
 
-    # FatSecret (optional fallback)
+    # FatSecret (optional fallback). Basic tier requires IP whitelist — point
+    # FATSECRET_PROXY_URL at a static-IP proxy (e.g. Fixie / QuotaGuard) whose
+    # outbound IP is whitelisted in the FatSecret developer console. Without
+    # the proxy, requests from Railway's rotating IPs will be rejected.
     FATSECRET_CLIENT_ID: str | None = None
     FATSECRET_CLIENT_SECRET: str | None = None
+    FATSECRET_PROXY_URL: str | None = None
 
     @field_validator("DATABASE_URL", mode="before")
     @classmethod

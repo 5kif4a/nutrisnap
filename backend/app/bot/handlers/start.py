@@ -1,7 +1,7 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 from telegram.ext import ContextTypes, ConversationHandler
 
-from app.bot.handlers.onboard import _Step
+from app.bot.handlers.onboard_state import OnboardStep as _Step
 from app.core.config import settings
 from app.db.session import async_session_factory
 from app.repositories.user_repo import upsert_user_from_telegram
@@ -24,7 +24,9 @@ WELCOME_FIRST_TIME = (
 )
 
 
-async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def handle_start_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
     """Entry-point of the onboarding ConversationHandler.
 
     First-time users (no profile yet) drop straight into the sex question.
@@ -42,8 +44,12 @@ async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYP
         sex_keyboard = InlineKeyboardMarkup(
             [
                 [
-                    InlineKeyboardButton("👨 Мужской", callback_data="onboard_sex:male"),
-                    InlineKeyboardButton("👩 Женский", callback_data="onboard_sex:female"),
+                    InlineKeyboardButton(
+                        "👨 Мужской", callback_data="onboard_sex:male"
+                    ),
+                    InlineKeyboardButton(
+                        "👩 Женский", callback_data="onboard_sex:female"
+                    ),
                 ]
             ]
         )

@@ -1,4 +1,3 @@
-import { Button } from "@telegram-apps/telegram-ui";
 import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { CircularProgress } from "../components/CircularProgress";
@@ -48,22 +47,24 @@ export function Dashboard({ date, onDateChange }: Props) {
   const isToday = date === todayISO();
 
   return (
-    <div className="mx-auto max-w-md px-4 pb-28 pt-4">
-      {/* Date navigation */}
-      <div className="mb-4 flex items-center justify-between">
+    <div className="mx-auto max-w-md px-4 pb-32 pt-4">
+      {/* Header — date navigation. Calendar reachable via bottom-nav tab. */}
+      <div className="mb-4 flex items-center gap-2 pr-12">
         <button
           onClick={() => shiftDay(-1)}
           aria-label="Предыдущий день"
-          className="flex h-9 w-9 items-center justify-center rounded-full bg-tg-card text-tg-text shadow-sm"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-tg-card text-tg-text shadow-sm"
         >
           <ChevronLeft size={20} />
         </button>
-        <span className="font-semibold text-tg-text">{humanDate(date)}</span>
+        <span className="flex-1 text-center font-semibold text-tg-text">
+          {humanDate(date)}
+        </span>
         <button
           onClick={() => shiftDay(1)}
           disabled={isToday}
           aria-label="Следующий день"
-          className="flex h-9 w-9 items-center justify-center rounded-full bg-tg-card text-tg-text shadow-sm disabled:opacity-30"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-tg-card text-tg-text shadow-sm disabled:opacity-30"
         >
           <ChevronRight size={20} />
         </button>
@@ -124,20 +125,24 @@ export function Dashboard({ date, onDateChange }: Props) {
               ))
             )}
           </div>
-
-          <div className="mt-5">
-            <Button
-              size="l"
-              stretched
-              mode="filled"
-              onClick={closeToBot}
-              before={<Plus size={18} />}
-            >
-              Добавить приём пищи
-            </Button>
-          </div>
         </>
       ) : null}
+
+      {/* FAB — sits above the liquid-glass nav (z-50) but below modals.
+          Positioned right-bottom, fixed to the viewport. */}
+      <button
+        onClick={closeToBot}
+        aria-label="Добавить приём пищи"
+        className="liquid-glass fixed right-5 z-40 flex h-14 w-14 items-center justify-center rounded-full text-white active:scale-95"
+        style={{
+          background:
+            "linear-gradient(135deg, var(--accent), rgba(120,92,220,0.95))",
+          // Park above the nav pill (nav has 12px safe-area padding + ~62px height).
+          bottom: "calc(env(safe-area-inset-bottom, 0px) + 88px)",
+        }}
+      >
+        <Plus size={26} strokeWidth={2.5} />
+      </button>
     </div>
   );
 }

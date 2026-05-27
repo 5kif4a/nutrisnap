@@ -55,7 +55,7 @@ LangGraph Agent
          │    └── get_daily_summary(user_id, date) → сводка за день
          │
          └── RAG Pipeline (Qdrant)
-              ├── Источники: USDA, кураторская база региональных блюд (KZ, RU, UZ, ...)
+              ├── Источники: кураторская база региональных блюд (KZ, RU, UZ, ...)
               ├── Chunking: 1 chunk = 1 продукт
               ├── Embeddings: text-embedding-3-small
               └── Reranker: по similarity score
@@ -122,7 +122,7 @@ kcal_per_100g    FLOAT
 protein_per_100g FLOAT
 fat_per_100g     FLOAT
 carbs_per_100g   FLOAT
-source      VARCHAR(20)   -- fatsecret / usda / off / custom / curated / llm_estimate
+source      VARCHAR(20)   -- fatsecret / off / custom / curated / user_recipe / llm_estimate
 cuisine     VARCHAR(16)   -- kz / ru / uz / ge / tr / ... (optional regional tag)
 fatsecret_id TEXT
 ```
@@ -280,7 +280,7 @@ References: таблица популярных казахстанских бл�
 
 ## 10. RAG-пайплайн
 
-- **Источник данных:** USDA SR Legacy (CSV, ~9000 продуктов) + ручная таблица ~200 КЗ блюд
+- **Источник данных:** ручная кураторская таблица ~200 региональных блюд (KZ/RU/UZ/GE...)
 - **Chunking:** 1 документ = 1 продукт (`name | aliases | kcal | protein | fat | carbs | per_100g`)
 - **Embeddings:** `text-embedding-3-small` (1536 dim, $0.02/1M tokens)
 - **Vector DB:** Qdrant, коллекция `foods`, метаданные: source, kcal, category
@@ -363,7 +363,7 @@ services:
 |---|---|
 | 1 | БД схема + миграции, PTB бот skeleton, FastAPI базовые роуты, онбординг |
 | 2 | LangGraph граф (фото+текст), GPT-4o Vision, Whisper STT, LangSmith трейсинг |
-| 3 | RAG пайплайн (Qdrant + USDA данные), MCP-сервер, FatSecret API |
+| 3 | RAG пайплайн (Qdrant + кураторский seed), MCP-сервер, FatSecret API |
 | 4 | React Mini App (дашборд + календарь), Skill + SKILL.md, scheduled jobs |
 | 5 | Golden dataset 30 примеров, A/B эксперимент, ARCHITECTURE.md, EVALS.md, README, презентация |
 

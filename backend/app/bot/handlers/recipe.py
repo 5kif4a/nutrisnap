@@ -43,7 +43,6 @@ from app.repositories.food_repo import save_user_recipe
 from app.repositories.meal_repo import MealItemPayload, log_meal_with_items
 from app.repositories.user_repo import get_user_by_tg_id
 from app.services.meal_drafts import pop_draft
-from app.services.meal_type_inference import infer_meal_type_by_clock
 from app.services.recipe_drafts import (
     RecipeDraft,
     append_ingredients,
@@ -68,6 +67,7 @@ class _Step(IntEnum):
 
 # ─── Entry from the photo-result keyboard ────────────────────────────────────
 
+
 async def handle_recipe_start_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
@@ -85,7 +85,9 @@ async def handle_recipe_start_callback(
 
     meal_draft = await pop_draft(meal_draft_id)
     if meal_draft is None:
-        await query.edit_message_text("⏱ Черновик уже не действителен — пришли фото ещё раз.")
+        await query.edit_message_text(
+            "⏱ Черновик уже не действителен — пришли фото ещё раз."
+        )
         return ConversationHandler.END
 
     # The recipe name comes from the original caption when available;
@@ -100,7 +102,9 @@ async def handle_recipe_start_callback(
     await put_draft(draft)
 
     panel_text = _render_collecting_panel(draft)
-    await query.edit_message_text(panel_text, reply_markup=build_recipe_collecting_keyboard())
+    await query.edit_message_text(
+        panel_text, reply_markup=build_recipe_collecting_keyboard()
+    )
     if query.message is not None:
         await update_draft(
             update.effective_user.id, panel_message_id=query.message.message_id
@@ -110,19 +114,24 @@ async def handle_recipe_start_callback(
 
 # ─── COLLECTING state ────────────────────────────────────────────────────────
 
+
 async def handle_recipe_photo(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
     """User sends one more ingredient photo while collecting."""
-    if update.effective_message is None or update.effective_user is None:
+    if (
+        update.effective_message is None
+        or update.effective_user is None
+        or not update.effective_message.photo
+    ):
         return _Step.COLLECTING
     msg = update.effective_message
-    if not msg.photo:
-        return _Step.COLLECTING
 
     draft = await get_draft(update.effective_user.id)
     if draft is None:
-        await msg.reply_text("⏱ Рецепт-сессия уже не активна. Пришли фото и начни заново.")
+        await msg.reply_text(
+            "⏱ Рецепт-сессия уже не активна. Пришли фото и начни заново."
+        )
         return ConversationHandler.END
 
     # Note: albums in recipe mode are processed one photo at a time. The
@@ -148,7 +157,9 @@ async def handle_recipe_photo(
 
     resolved = result.get("resolved_items") or []
     if not resolved:
-        await pinging.edit_text("Не разглядел ингредиент 🤔 Попробуй с другого ракурса.")
+        await pinging.edit_text(
+            "Не разглядел ингредиент 🤔 Попробуй с другого ракурса."
+        )
         return _Step.COLLECTING
 
     new_items: list[MealItemPayload] = [r["payload"] for r in resolved]
@@ -159,7 +170,9 @@ async def handle_recipe_photo(
 
     await pinging.edit_text(
         "Добавил:\n"
-        + "\n".join(f"• {it.food_name} — {it.amount:g} {it.unit.value}" for it in new_items)
+        + "\n".join(
+            f"• {it.food_name} — {it.amount:g} {it.unit.value}" for it in new_items
+        )
     )
     await _refresh_panel(context, draft)
     return _Step.COLLECTING
@@ -194,6 +207,7 @@ async def handle_recipe_done_callback(
 
 
 # ─── AWAIT_TOTAL_WEIGHT state ────────────────────────────────────────────────
+
 
 async def handle_recipe_total_weight(
     update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -253,6 +267,7 @@ async def handle_recipe_total_weight(
 
 # ─── AWAIT_POST_SAVE_CHOICE state ────────────────────────────────────────────
 
+
 async def handle_recipe_log_portion_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
@@ -307,6 +322,7 @@ async def handle_recipe_done_no_meal_callback(
 
 # ─── AWAIT_PORTION state ─────────────────────────────────────────────────────
 
+
 async def handle_recipe_portion(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
@@ -342,7 +358,9 @@ async def handle_recipe_portion(
     keyboard = InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("🍳 Завтрак", callback_data="recipe_meal:breakfast"),
+                InlineKeyboardButton(
+                    "🍳 Завтрак", callback_data="recipe_meal:breakfast"
+                ),
                 InlineKeyboardButton("🥗 Обед", callback_data="recipe_meal:lunch"),
             ],
             [
@@ -412,6 +430,7 @@ async def handle_recipe_meal_type_callback(
 
 # ─── Cancel ──────────────────────────────────────────────────────────────────
 
+
 async def handle_recipe_cancel_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
@@ -430,41 +449,68 @@ async def handle_recipe_cancel_callback(
 
 # ─── Wiring ──────────────────────────────────────────────────────────────────
 
+
 def build_recipe_handler() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[
-            CallbackQueryHandler(handle_recipe_start_callback, pattern=r"^recipe:start:"),
+            CallbackQueryHandler(
+                handle_recipe_start_callback, pattern=r"^recipe:start:"
+            ),
         ],
         states={
             _Step.COLLECTING: [
                 MessageHandler(filters.PHOTO, handle_recipe_photo),
-                CallbackQueryHandler(handle_recipe_done_callback, pattern=r"^recipe:done$"),
-                CallbackQueryHandler(handle_recipe_cancel_callback, pattern=r"^recipe:cancel$"),
+                CallbackQueryHandler(
+                    handle_recipe_done_callback, pattern=r"^recipe:done$"
+                ),
+                CallbackQueryHandler(
+                    handle_recipe_cancel_callback, pattern=r"^recipe:cancel$"
+                ),
             ],
             _Step.AWAIT_TOTAL_WEIGHT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_recipe_total_weight),
-                CallbackQueryHandler(handle_recipe_cancel_callback, pattern=r"^recipe:cancel$"),
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND, handle_recipe_total_weight
+                ),
+                CallbackQueryHandler(
+                    handle_recipe_cancel_callback, pattern=r"^recipe:cancel$"
+                ),
             ],
             _Step.AWAIT_POST_SAVE_CHOICE: [
-                CallbackQueryHandler(handle_recipe_log_portion_callback, pattern=r"^recipe:log_portion$"),
-                CallbackQueryHandler(handle_recipe_done_no_meal_callback, pattern=r"^recipe:done_no_meal$"),
-                CallbackQueryHandler(handle_recipe_cancel_callback, pattern=r"^recipe:cancel$"),
+                CallbackQueryHandler(
+                    handle_recipe_log_portion_callback, pattern=r"^recipe:log_portion$"
+                ),
+                CallbackQueryHandler(
+                    handle_recipe_done_no_meal_callback,
+                    pattern=r"^recipe:done_no_meal$",
+                ),
+                CallbackQueryHandler(
+                    handle_recipe_cancel_callback, pattern=r"^recipe:cancel$"
+                ),
             ],
             _Step.AWAIT_PORTION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_recipe_portion),
-                CallbackQueryHandler(handle_recipe_meal_type_callback, pattern=r"^recipe_meal:"),
-                CallbackQueryHandler(handle_recipe_cancel_callback, pattern=r"^recipe:cancel$"),
+                CallbackQueryHandler(
+                    handle_recipe_meal_type_callback, pattern=r"^recipe_meal:"
+                ),
+                CallbackQueryHandler(
+                    handle_recipe_cancel_callback, pattern=r"^recipe:cancel$"
+                ),
             ],
         },
-        fallbacks=[CallbackQueryHandler(handle_recipe_cancel_callback, pattern=r"^recipe:cancel$")],
+        fallbacks=[
+            CallbackQueryHandler(
+                handle_recipe_cancel_callback, pattern=r"^recipe:cancel$"
+            )
+        ],
         name="recipe_builder",
-        persistent=False,
+        persistent=True,
         per_chat=True,
         per_user=True,
     )
 
 
 # ─── Internals ───────────────────────────────────────────────────────────────
+
 
 async def _download_largest_photo(msg) -> bytes:
     photo = msg.photo[-1]
@@ -486,7 +532,9 @@ def _sum_macros(items: list[MealItemPayload]) -> dict:
 def _render_collecting_panel(draft: RecipeDraft) -> str:
     lines = [f"🍳 *Рецепт: {draft.name}*", "", "Ингредиенты:"]
     for it in draft.ingredients:
-        lines.append(f"• {it.food_name} — {it.amount:g} {it.unit.value} ({it.kcal:.0f} ккал)")
+        lines.append(
+            f"• {it.food_name} — {it.amount:g} {it.unit.value} ({it.kcal:.0f} ккал)"
+        )
     totals = _sum_macros(draft.ingredients)
     lines.append("")
     lines.append(
@@ -494,11 +542,15 @@ def _render_collecting_panel(draft: RecipeDraft) -> str:
         f"Б {totals['protein_g']:.0f} / Ж {totals['fat_g']:.0f} / У {totals['carbs_g']:.0f}"
     )
     lines.append("")
-    lines.append("Добавляй ещё фото ингредиентов или нажми *✅ Готово*, когда всё взвесил.")
+    lines.append(
+        "Добавляй ещё фото ингредиентов или нажми *✅ Готово*, когда всё взвесил."
+    )
     return "\n".join(lines)
 
 
-async def _refresh_panel(context: ContextTypes.DEFAULT_TYPE, draft: RecipeDraft) -> None:
+async def _refresh_panel(
+    context: ContextTypes.DEFAULT_TYPE, draft: RecipeDraft
+) -> None:
     if draft.panel_message_id is None:
         return
     try:

@@ -5,9 +5,42 @@ from __future__ import annotations
 from app.graph.state import GraphState
 
 
+# Map internal error tags (set by parser/vision/transcribe nodes) to
+# user-facing messages. Keep the technical identifier in `state["error"]`
+# so logs/LangSmith stay debuggable, but never surface it to the user.
+def _user_facing_error(err: str) -> str:
+    if err.startswith("vision failed"):
+        return (
+            "🙃 Не получилось распознать фото.\n"
+            "Сними поближе и в лучшем свете — или опиши текстом."
+        )
+    if err.startswith("stt failed"):
+        return (
+            "🙃 Не разобрал голосовое.\n"
+            "Попробуй ещё раз или опиши текстом."
+        )
+    if err.startswith("parse failed"):
+        return (
+            "🙃 Не получилось обработать сообщение.\n"
+            "Попробуй ещё раз через минуту или пришли фото / голосовое."
+        )
+    if err == "empty text input":
+        return "Пришли мне еду — фото, голосовое или текст."
+    if err.startswith("nutrition failed"):
+        return (
+            "🙃 Не смог посчитать КБЖУ.\n"
+            "Попробуй ещё раз — иногда внешние сервисы тормозят."
+        )
+    # Fallback — covers any future error tags we forgot to map.
+    return (
+        "🙃 Что-то пошло не так.\n"
+        "Попробуй ещё раз через минуту."
+    )
+
+
 async def finalize_node(state: GraphState) -> GraphState:
     if state.get("error"):
-        state["response_text"] = f"⚠️ {state['error']}"
+        state["response_text"] = _user_facing_error(state["error"])
         return state
 
     resolved = state.get("resolved_items") or []

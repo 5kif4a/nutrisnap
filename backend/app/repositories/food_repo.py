@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from uuid import UUID
 
-from sqlalchemy import desc, func, or_, select, text
+from sqlalchemy import case, desc, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,11 +17,13 @@ from app.db.models import (
     MealType,
     User,
 )
+from app.rag.qdrant import schedule_food_indexing
 
 
 @dataclass(slots=True)
 class ExternalFoodPayload:
-    """Normalized food info from any external source (OFF, FatSecret, USDA, Vision)."""
+    """Normalized food info from any external source (OFF, FatSecret, Vision)."""
+
     name: str
     metric: FoodMetric
     kcal: float
@@ -41,6 +43,7 @@ class ExternalFoodPayload:
 @dataclass(slots=True)
 class QuickAddItem:
     """Snapshot of a previously-eaten item for one-tap re-logging."""
+
     food_name: str
     food_id: UUID | None
     amount: float
@@ -56,28 +59,42 @@ class QuickAddItem:
 async def search_foods_by_name(
     session: AsyncSession, query: str, limit: int = 10
 ) -> list[Food]:
-    """Search local catalog by name OR aliases. Case-insensitive."""
+    """Search local catalog by name OR aliases. Case-insensitive.
+
+    Results are ordered by source trust — curated (hand-verified) wins over
+    OFF / LLM-estimate which historically have produced noisy text hits.
+    Without this, a garbage `off`-cached row like "лесной орех 🌰 сникерс"
+    could outrank the curated "Snickers".
+    """
     pattern = f"%{query.strip()}%"
+    source_priority = case(
+        (Food.source == FoodSource.CURATED, 0),
+        (Food.source == FoodSource.USER_RECIPE, 1),
+        (Food.source == FoodSource.FATSECRET, 2),
+        (Food.source == FoodSource.OPEN_FOOD_FACTS, 3),
+        (Food.source == FoodSource.CUSTOM, 4),
+        (Food.source == FoodSource.LLM_ESTIMATE, 5),
+        else_=99,
+    )
     stmt = (
         select(Food)
         .where(
             or_(
                 Food.name.ilike(pattern),
                 # ANY-aliases match: unnest aliases and check each
-                text("EXISTS (SELECT 1 FROM unnest(aliases) a WHERE a ILIKE :pat)").bindparams(
-                    pat=pattern
-                ),
+                text(
+                    "EXISTS (SELECT 1 FROM unnest(aliases) a WHERE a ILIKE :pat)"
+                ).bindparams(pat=pattern),
                 Food.brand.ilike(pattern),
             )
         )
+        .order_by(source_priority, Food.created_at.desc())
         .limit(limit)
     )
     return list((await session.scalars(stmt)).all())
 
 
-async def lookup_food_by_barcode(
-    session: AsyncSession, barcode: str
-) -> Food | None:
+async def lookup_food_by_barcode(session: AsyncSession, barcode: str) -> Food | None:
     return await session.scalar(select(Food).where(Food.barcode == barcode))
 
 
@@ -131,6 +148,9 @@ async def upsert_food_from_external(
         await session.flush()
 
     await session.commit()
+    # Fire-and-forget: index the new/updated catalog row in Qdrant so the
+    # recommender sees it without waiting for the next manual `ingest_foods`.
+    schedule_food_indexing(food)
     return food
 
 
@@ -169,6 +189,7 @@ async def save_user_recipe(
     session.add(food)
     await session.commit()
     await session.refresh(food)
+    schedule_food_indexing(food)
     return food
 
 
@@ -215,7 +236,7 @@ async def list_recent_foods_per_meal_type(
             food_name=r.food_name,
             food_id=r.food_id,
             amount=r.amount,
-            unit=r.unit,
+            unit=FoodMetric(r.unit),
             weight_g=r.weight_g,
             kcal=r.kcal,
             protein_g=r.protein_g,

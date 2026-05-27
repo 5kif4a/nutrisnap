@@ -31,6 +31,7 @@ def get_off_client() -> httpx.AsyncClient:
 
 # ─── Public callables ────────────────────────────────────────────────────────
 
+
 async def lookup_food_by_barcode(barcode: str) -> ExternalFoodPayload | None:
     """Lookup a product by EAN/UPC barcode via OFF v2 API."""
     client = get_off_client()
@@ -50,7 +51,9 @@ async def lookup_food_by_barcode(barcode: str) -> ExternalFoodPayload | None:
     return _map_off_product(data["product"], barcode=barcode)
 
 
-async def search_foods_by_text(query: str, *, limit: int = 5) -> list[ExternalFoodPayload]:
+async def search_foods_by_text(
+    query: str, *, limit: int = 5
+) -> list[ExternalFoodPayload]:
     """Text search via OFF's search endpoint. Returns ExternalFoodPayload list."""
     client = get_off_client()
     try:
@@ -83,7 +86,10 @@ async def search_foods_by_text(query: str, *, limit: int = 5) -> list[ExternalFo
 
 # ─── Internal mapping ────────────────────────────────────────────────────────
 
-def _map_off_product(product: dict, *, barcode: str | None) -> ExternalFoodPayload | None:
+
+def _map_off_product(
+    product: dict, *, barcode: str | None
+) -> ExternalFoodPayload | None:
     """Convert OFF product dict → our ExternalFoodPayload.
 
     Returns None if nutrition values are missing — OFF has lots of incomplete entries.

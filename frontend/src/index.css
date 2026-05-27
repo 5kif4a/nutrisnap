@@ -3,15 +3,24 @@
 @tailwind utilities;
 
 :root {
-  /* Fallbacks; overwritten at runtime by telegram.ts applyTheme(). */
-  --tg-bg: #f4f4f5;
-  --tg-card: #ffffff;
-  --tg-text: #0f172a;
-  --tg-hint: #94a3b8;
-  --tg-link: #3b82f6;
-  --tg-button: #3b82f6;
+  /* Fallbacks; overwritten at runtime by telegram.ts applyTheme().
+     Defaults below tuned for the Mira-style dark palette so the app looks
+     right even before Telegram theme params load. */
+  --tg-bg: #0e1117;
+  --tg-card: #161b22;
+  --tg-text: #e6e8eb;
+  --tg-hint: #8b95a3;
+  --tg-link: #5b8def;
+  --tg-button: #5b8def;
   --tg-button-text: #ffffff;
-  --tg-border: #e5e7eb;
+  --tg-border: rgba(255, 255, 255, 0.06);
+
+  /* Glass + accent tokens used by the liquid-glass nav and FAB. */
+  --glass-bg: rgba(22, 27, 34, 0.55);
+  --glass-stroke: rgba(255, 255, 255, 0.08);
+  --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  --accent: #5b8def;
+  --accent-soft: rgba(91, 141, 239, 0.18);
 }
 
 html,
@@ -22,10 +31,114 @@ body,
 
 body {
   margin: 0;
-  background: var(--tg-bg);
   color: var(--tg-text);
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
     sans-serif;
   -webkit-tap-highlight-color: transparent;
+  background-color: var(--tg-bg);
+}
+
+/* Soft, non-aggressive gradient backdrop — three radial blobs over the
+   Telegram bg colour. Fixed so it doesn't scroll with content.
+   Opacities tuned for dark theme legibility — bright enough to read as a
+   coloured glow on near-black, not so loud as to fight the foreground. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(
+      ellipse 90% 65% at 10% -15%,
+      rgba(91, 141, 239, 0.32),
+      transparent 65%
+    ),
+    radial-gradient(
+      ellipse 80% 55% at 115% 110%,
+      rgba(140, 100, 240, 0.28),
+      transparent 65%
+    ),
+    radial-gradient(
+      ellipse 60% 45% at 95% 5%,
+      rgba(45, 212, 191, 0.14),
+      transparent 70%
+    );
+}
+
+#root {
+  position: relative;
+  z-index: 1;
+}
+
+/* Utility: surface card with subtle stroke (consistent with glass nav). */
+.surface-card {
+  background: var(--tg-card);
+  border: 1px solid var(--glass-stroke);
+  border-radius: 1rem;
+}
+
+/* iOS-26-style liquid glass — used by the bottom nav pill and the FAB. */
+.liquid-glass {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
+  backdrop-filter: saturate(180%) blur(24px);
+  border: 1px solid var(--glass-stroke);
+  box-shadow: var(--glass-shadow);
+}
+
+/* Bottom-sheet slide-in / backdrop-fade — used by FormulaSheet. */
+@keyframes sheet-slide-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes sheet-slide-down {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes sheet-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes sheet-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.animate-sheet-slide {
+  animation: sheet-slide-up 280ms cubic-bezier(0.32, 0.72, 0.24, 1) both;
+  will-change: transform;
+}
+
+.animate-sheet-slide-out {
+  animation: sheet-slide-down 200ms cubic-bezier(0.32, 0.72, 0.24, 1) both;
+  will-change: transform;
+}
+
+.animate-sheet-fade {
+  animation: sheet-fade-in 200ms ease-out both;
+}
+
+.animate-sheet-fade-out {
+  animation: sheet-fade-out 200ms ease-out both;
 }

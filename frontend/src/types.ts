@@ -29,6 +29,7 @@ export interface UserProfile {
   age: number | null;
   activity: ActivityLevel | null;
   goal: Goal | null;
+  target_weight_kg: number | null;
   targets: MacroTargets;
 }
 
@@ -39,6 +40,15 @@ export interface ProfileUpdate {
   age: number;
   activity: ActivityLevel;
   goal: Goal;
+  // Only meaningful for LOSE / GAIN; backend stores NULL when goal=MAINTAIN.
+  target_weight_kg?: number | null;
+  // When `manual_targets` is true the four target_* fields override the
+  // Mifflin-St Jeor auto-calc on the backend.
+  manual_targets?: boolean;
+  target_kcal?: number | null;
+  target_protein_g?: number | null;
+  target_fat_g?: number | null;
+  target_carbs_g?: number | null;
 }
 
 export interface MealItemOut {
@@ -90,4 +100,31 @@ export interface MonthResponse {
   month: string; // YYYY-MM
   target_kcal: number | null;
   days: MonthDay[];
+}
+
+export interface QuickAddFoodOut {
+  food_name: string;
+  food_id: string | null;
+  amount: number;
+  unit: FoodMetric;
+  weight_g: number;
+  kcal: number;
+  protein_g: number;
+  fat_g: number;
+  carbs_g: number;
+  frequency: number;
+}
+
+export interface QuickAddRequest {
+  food_name: string;
+  amount: number;
+  unit: FoodMetric;
+  weight_g: number;
+  kcal: number;
+  protein_g: number;
+  fat_g: number;
+  carbs_g: number;
+  meal_type: MealType;
+  food_id?: string | null;
+  eaten_at?: string | null;
 }

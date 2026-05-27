@@ -70,14 +70,31 @@ export function applyTheme(): void {
     root.style.setProperty(name, value || fallback);
   };
 
-  set("--tg-bg", params.bg_color, dark ? "#17212b" : "#f4f4f5");
-  set("--tg-card", params.secondary_bg_color, dark ? "#232e3c" : "#ffffff");
-  set("--tg-text", params.text_color, dark ? "#ffffff" : "#0f172a");
-  set("--tg-hint", params.hint_color, dark ? "#7d8b99" : "#94a3b8");
-  set("--tg-link", params.link_color, "#3b82f6");
-  set("--tg-button", params.button_color, "#3b82f6");
+  // Mira-style palette: deep navy base, soft (not pure-white) text on dark
+  // so the gradient backdrop and glass nav read cleanly without harsh contrast.
+  set("--tg-bg", params.bg_color, dark ? "#0e1117" : "#f5f6fa");
+  set("--tg-card", params.secondary_bg_color, dark ? "#161b22" : "#ffffff");
+  set("--tg-text", params.text_color, dark ? "#e6e8eb" : "#0f172a");
+  set("--tg-hint", params.hint_color, dark ? "#8b95a3" : "#94a3b8");
+  set("--tg-link", params.link_color, "#5b8def");
+  set("--tg-button", params.button_color, "#5b8def");
   set("--tg-button-text", params.button_text_color, "#ffffff");
-  set("--tg-border", undefined, dark ? "#33455a" : "#e5e7eb");
+  set(
+    "--tg-border",
+    undefined,
+    dark ? "rgba(255,255,255,0.06)" : "#e5e7eb",
+  );
+  // Glass surface tokens — depend on bg theme.
+  set(
+    "--glass-bg",
+    undefined,
+    dark ? "rgba(22,27,34,0.55)" : "rgba(255,255,255,0.65)",
+  );
+  set(
+    "--glass-stroke",
+    undefined,
+    dark ? "rgba(255,255,255,0.08)" : "rgba(15,23,42,0.06)",
+  );
 }
 
 export function initTelegram(): void {

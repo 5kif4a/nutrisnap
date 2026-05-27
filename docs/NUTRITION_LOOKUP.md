@@ -11,7 +11,7 @@
 | # | Источник | Покрытие | Цена |
 |---|---|---|---|
 | 1 | PostgreSQL local cache | ~80% после "прогрева" базы | 10ms |
-| 2 | Qdrant RAG (USDA seed + KZ) | западные продукты, семантика | 50ms + embedding |
+| 2 | Qdrant RAG (curated regional + raw foods) | западные продукты, семантика | 50ms + embedding |
 | 3 | Open Food Facts (barcode) | бренды, упаковки (President, Coca-Cola) | 200ms |
 | 4 | Open Food Facts (text search) | бренды без штрих-кода | 300ms |
 | 5 | FatSecret API | редкие EN-only продукты | 500ms |
@@ -277,7 +277,6 @@ nutrition_fetch:
 | Сервис | Нужен ключ? | Whitelist IP? | Бесплатно? |
 |---|---|---|---|
 | Open Food Facts | ❌ нет | ❌ нет | ✅ да |
-| USDA FoodData | опционально | ❌ нет | ✅ да (3600 req/h) |
 | FatSecret | ✅ Client ID + Secret | ✅ нужен (запасной источник) | ✅ Basic free |
 | OpenAI (Vision/GPT) | ✅ | ❌ | ❌ |
 

@@ -15,9 +15,10 @@ InputType = Literal["photo", "voice", "text", "forward", "unknown"]
 
 class ResolvedItem(TypedDict, total=False):
     """A parsed item enriched with nutrition data, ready to save as a MealItem."""
+
     payload: MealItemPayload
-    source: FoodSource          # where nutrition came from
-    food_id_known: bool         # True if we matched to a Food in PG cache
+    source: FoodSource  # where nutrition came from
+    food_id_known: bool  # True if we matched to a Food in PG cache
 
 
 class GraphState(TypedDict, total=False):
@@ -25,7 +26,7 @@ class GraphState(TypedDict, total=False):
 
     # ─── Input (set by caller before invoke) ─────────────────────────────
     telegram_user_id: int
-    user_id: str                 # internal UUID (str form for serialization)
+    user_id: str  # internal UUID (str form for serialization)
     raw_input_type: InputType
     # Always a list. Single-photo case populates a one-element list; albums
     # (Telegram media_group_id) populate all photos for unified vision parsing.
@@ -46,5 +47,5 @@ class GraphState(TypedDict, total=False):
 
     # ─── Output ──────────────────────────────────────────────────────────
     resolved_items: list[ResolvedItem]
-    response_text: str           # human-friendly summary for the bot to send
+    response_text: str  # human-friendly summary for the bot to send
     error: str

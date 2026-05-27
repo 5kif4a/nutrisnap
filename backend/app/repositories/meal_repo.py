@@ -21,6 +21,7 @@ from app.db.models import (
 @dataclass(slots=True)
 class MealItemPayload:
     """A single item to log inside a meal (already nutrition-computed)."""
+
     food_name: str
     amount: float
     unit: FoodMetric

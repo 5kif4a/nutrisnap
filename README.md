@@ -21,36 +21,55 @@
 ## Фичи
 
 ### Ввод приёма пищи
-- 📸 Фото блюда → GPT-4o Vision распознаёт продукты и оценивает граммовку
+- 📸 Фото блюда / весов / упаковки → GPT-4o Vision распознаёт продукты, читает граммовку с дисплея весов, штрих-код с упаковки
 - 🎙 Голосовое сообщение → Whisper транскрибация → парсинг
-- ✏️ Текст или пересланное сообщение → GPT-4o-mini структурирует
-- 📦 Фото упаковки со штрих-кодом → Open Food Facts → точные КБЖУ
-- ⚡ Quick add — топ-5 частых и топ-3 недавних продуктов per приём пищи, один тап
+- ✏️ Текст или пересланное сообщение → GPT-4o-mini структурирует (правила: голое число = граммы, бренды в кириллице/транслите, composite-блюдо = один item)
+- ⚡ **Quick Add** под подтверждением приёма: одной кнопкой докинуть в текущий черновик частый продукт юзера на этот тип приёма
 
 ### Поиск продуктов (multi-source)
-1. Локальный кэш PostgreSQL
-2. Qdrant RAG (USDA seed + ~200 казахских блюд)
+1. Локальный кэш PostgreSQL с `ORDER BY source_priority` (`curated > user_recipe > off > llm_estimate`)
+2. Qdrant RAG (semantic search по name + brand + cuisine + aliases)
 3. Open Food Facts (по штрих-коду и текстовый поиск)
-4. FatSecret API (fallback для редких EN-only продуктов)
-5. GPT-4o-mini estimate (last resort)
+4. FatSecret API (fallback для редких EN-only продуктов, требует static IP proxy)
+5. GPT-4o-mini estimate — **ephemeral**, не загрязняет каталог
+
+Любой новый Food (из OFF / user-recipe) автоматически embed'ится в Qdrant fire-and-forget хуком — recommender видит каталог в реальном времени.
 
 ### Дневник и аналитика
 - Дашборд с кольцевым прогресс-баром калорий и БЖУ
-- Месячный календарь дней с цветовой индикацией
+- Месячный календарь дней с цветовой индикацией (зелёный/жёлтый/красный по доле дневной нормы)
 - Сводка `/today`, `/week` в боте
-- Утренние и вечерние scheduled-рассылки
+- **Daily morning nudge** в 09:00 Asia/Almaty — сводка вчерашнего + рекомендация на сегодня
+
+### AI Recommender (RAG)
+- Команда `/recommend` или кнопка в Mini App → LangGraph-subgraph 4 нод (`gather_user_state → compute_deficit → retrieve_candidates → compose_recommendation`)
+- Анализирует сегодняшний дефицит по белкам/жирам/углеводам vs цели, любимые продукты, последние 14 дней (для variety filter)
+- Qdrant top-20 кандидатов из каталога + LLM выбирает 3 с обоснованием
+- Триггеры: команда, утренний пуш, после большого/позднего приёма (>700ккал OR ≥19:00), при variety-alert (одни и те же блюда 5+ раз/неделю)
 
 ### Онбординг
 - Расчёт TDEE по формуле Миффлина-Сан Жеора (пол, вес, рост, возраст, активность, цель)
 - Подсчёт суточных норм калорий, белков, жиров, углеводов
+- ConversationHandler с `PicklePersistence` — стейт переживает рестарты
 
 ### Mini App
 - **Сегодня** — кольцо калорий, бары Б/Ж/У, приёмы пищи за день, навигация по датам
-- **Календарь** — месячная сетка с цветовой индикацией дней (зелёный/жёлтый/красный по доле дневной нормы), тап по дню → детальная статистика
-- **Профиль** — пол/вес/рост/возраст/активность/цель → пересчёт нормы (Mifflin-St Jeor)
-- Мои блюда (UGC) — _планируется_
-- Авторизация через Telegram `initData` (без отдельного логина), браузерный фолбэк для локального теста
+- **Календарь** — месячная сетка с цветовой индикацией, тап по дню → детальная статистика
+- **Продукты** — три таба (Поиск / Недавно / Часто) + селектор приёма сверху. Тап = `POST /api/meals/quick-add`. Поиск дебаунсится 250мс, бьёт `GET /api/foods/search`
+- **Профиль** — пол/вес/рост/возраст/активность/цель → пересчёт нормы или ручной override
+- Авторизация через Telegram `initData`, браузерный фолбэк для локального теста
 - React + Vite + Tailwind; нативные компоненты `@telegram-apps/telegram-ui`, мост/тема через `@telegram-apps/sdk-react`
+
+### Команды бота
+
+| Команда | Что |
+|---|---|
+| `/start` | Онбординг (расчёт КБЖУ) или приветствие вернувшемуся |
+| `/recommend [запрос]` | RAG-рекомендации (опциональный free-form: "что-то с белком на ужин") |
+| `/today` | КБЖУ за сегодня |
+| `/week` | Сводка за неделю |
+| `/open` | Открыть Mini App |
+| `/help` | Справка |
 
 ---
 
@@ -147,15 +166,17 @@ sequenceDiagram
 
 ## Сервисы
 
-Docker Compose (`docker-compose.yml`):
+Два compose-файла: `docker-compose.yml` — прод-стиль (без hot-reload, без bind-mount), `docker-compose.dev.yml` — для разработки (hot-reload через watchfiles, pgadmin, ngrok-тоннель для Mini App).
 
-| Сервис | Что делает | Порт (локально) |
+| Сервис | Что делает | Порт (dev) |
 |---|---|---|
 | `postgres` | основная БД (users, meals, meal_items, foods) | 5432 |
-| `qdrant` | векторный поиск для RAG | 6333 |
+| `qdrant` | векторный поиск для RAG (collection `foods`) | 6333 |
+| `pgadmin` *(dev)* | веб-UI для Postgres, авто-подключение через servers.json | 8081 |
 | `migrate` | прогоняет `alembic upgrade head` и завершается; `api`/`bot` ждут его | — |
 | `api` | FastAPI: `/health`, `/telegram/webhook`, Mini App API (`/api/*`) | 8000 |
-| `bot` | standalone polling worker для разработки | — |
+| `bot` | standalone polling worker для разработки + PTB JobQueue (daily nudge) | — |
+| `ngrok` *(dev)* | HTTPS-туннель к Vite dev server (для тестов Mini App в Telegram) | 4040 |
 
 Mini App **frontend** в Compose не входит — поднимается отдельно через Vite
 (`cd frontend && npm run dev`, порт 5173, прокси `/api` → `:8000`).
@@ -184,14 +205,15 @@ cd nutrisnap
 cp backend/.env.example backend/.env
 # отредактировать BOT_TOKEN, OPENAI_API_KEY, LANGCHAIN_API_KEY
 
-# 3. Поднять стек
-docker compose up
+# 3. Поднять стек (dev-режим с hot-reload + pgadmin)
+docker compose -f docker-compose.dev.yml up -d
+# миграции прогоняются автоматически сервисом `migrate` перед запуском api/bot
 
-# 4. (отдельно) Миграции БД
-docker compose exec api alembic upgrade head
+# 4. Засидить курированный каталог (41 продукт из реальных FatSecret-логов)
+docker compose -f docker-compose.dev.yml exec api python -m app.db.seed_foods
 
-# 5. (опционально) Засидить казахские блюда
-docker compose exec api python scripts/seed_kz_foods.py
+# 5. Загрузить эмбеддинги каталога в Qdrant
+docker compose -f docker-compose.dev.yml exec api python -m app.rag.ingest_foods
 ```
 
 API будет на http://localhost:8000 — проверить healthcheck:
@@ -199,32 +221,44 @@ API будет на http://localhost:8000 — проверить healthcheck:
 curl http://localhost:8000/health
 ```
 
+pgAdmin доступен на http://localhost:8081 (логин `admin@nutrisnap.com` / `nutrisnap`, сервер NutriSnap уже зарегистрирован).
+
 ---
 
 ## Структура проекта
 
 ```
 nutrisnap/
-├── backend/                    # FastAPI + bot + LangGraph
+├── backend/                    # FastAPI + bot + LangGraph + RAG
 │   ├── app/
 │   │   ├── main.py            # FastAPI entrypoint (/health, /telegram/webhook, /api)
 │   │   ├── core/              # config, settings
-│   │   ├── api/               # роуты Mini App (initData auth, /api/me, /api/day, /api/month)
-│   │   ├── bot/               # PTB handlers (start, onboard, meal)
-│   │   ├── db/                # SQLAlchemy модели + session
-│   │   ├── graph/             # LangGraph граф + ноды
-│   │   ├── repositories/      # доступ к данным (user/meal/food repo)
-│   │   ├── services/          # OpenAI, OFF, nutrition calc/targets
-│   │   ├── mcp/               # MCP nutrition server        (планируется)
-│   │   ├── rag/               # Qdrant ingest + retrieval   (планируется)
-│   │   └── evals/             # golden dataset + run.py     (планируется)
+│   │   ├── api/               # Mini App REST (/api/me, /day, /month, /foods/*, /meals/quick-add, /recommendations)
+│   │   ├── bot/
+│   │   │   ├── handlers/      # start, onboard, meal, recipe, recommend, common
+│   │   │   ├── jobs.py        # PTB JobQueue: daily nudge + variety detection
+│   │   │   ├── keyboards.py   # inline-клавиатуры (Quick Add, meal-type, recipe)
+│   │   │   └── application.py # PTB Application + PicklePersistence
+│   │   ├── db/                # SQLAlchemy модели, session, seed_foods.py
+│   │   ├── graph/
+│   │   │   ├── graph.py       # main meal-logging граф
+│   │   │   ├── recommender.py # /recommend RAG subgraph (4 nodes)
+│   │   │   └── nodes/         # route, vision, transcribe, parser, nutrition, finalize
+│   │   ├── rag/
+│   │   │   ├── embeddings.py  # text-embedding-3-small wrapper
+│   │   │   ├── qdrant.py      # singleton client, semantic search, auto-index hook
+│   │   │   └── ingest_foods.py# batch embed всего каталога
+│   │   ├── repositories/      # food_repo, meal_repo, user_repo
+│   │   ├── services/          # OpenAI, OFF, FatSecret, nutrition_calc, meal_drafts, recommendation_cache
+│   │   ├── evals/
+│   │   │   ├── golden.jsonl   # 44 кейса (ТГ-сообщения + FatSecret-эталоны + edge)
+│   │   │   └── run.py         # runner с pass-rate + MAPE per macro
+│   │   └── mcp/               # MCP nutrition server (планируется)
 │   ├── alembic/               # миграции БД
 │   ├── scripts/               # healthcheck-скрипты
-│   ├── tests/                                              # (планируется)
 │   ├── Dockerfile             # multi-stage uv
 │   ├── railway.json
-│   ├── pyproject.toml         # uv-зависимости
-│   └── uv.lock
+│   └── pyproject.toml         # uv-зависимости + pylint config
 ├── frontend/                   # React + Vite + Tailwind Mini App
 │   ├── src/
 │   │   ├── main.tsx           # точка входа, init Telegram SDK
@@ -233,20 +267,24 @@ nutrisnap/
 │   │   ├── lib/api.ts         # API-клиент (X-Init-Data)
 │   │   ├── lib/date.ts        # UTC date/month утилиты
 │   │   ├── types.ts           # DTO (зеркало backend schemas)
-│   │   ├── pages/             # Dashboard, Calendar, Profile
+│   │   ├── pages/             # Dashboard, Calendar, MyFoods, Profile
 │   │   └── components/        # CircularProgress, MacroBar, MealCard, TabBar
 │   ├── package.json
 │   ├── vite.config.ts         # dev-прокси /api → :8000
 │   └── vercel.json
-├── docs/                       # спецификации
+├── docs/
 │   ├── specification.md
-│   ├── MINI_APP.md            # экраны, API, локальный запуск Mini App
+│   ├── EVALS.md               # методология + метрики + A/B (37→95.5% pass rate)
+│   ├── MINI_APP.md
 │   ├── ARCHITECTURE_VARIANTS.md
 │   ├── DATABASE_CONCURRENCY.md
 │   ├── NUTRITION_LOOKUP.md
-│   └── VALUE_PROPOSITION.md
+│   ├── VALUE_PROPOSITION.md
+│   └── golden/food_diary.md   # исходный FatSecret-экспорт юзера (ground truth)
 ├── .github/workflows/          # CI/CD (backend, frontend, evals)
-├── docker-compose.yml
+├── .pgadmin/servers.json       # авто-конфиг pgadmin для dev
+├── docker-compose.yml          # prod-style
+├── docker-compose.dev.yml      # dev (hot-reload + pgadmin + ngrok)
 ├── CLAUDE.md
 └── README.md
 ```
@@ -297,10 +335,18 @@ npm run preview    # предпросмотр прод-сборки
 > `docs/MINI_APP.md`.
 
 ### Evals
+
+44 кейса в `backend/app/evals/golden.jsonl` (реальные ТГ-сообщения юзера + продукты из его FatSecret-экспорта + edge-кейсы). Текущий pass rate **95.5%** при ±10% толерансе по каждому макро.
+
 ```bash
-cd backend
-uv run python -m app.evals.run --output results.json
+# Прогнать через docker (так бьёт реальный API + БД)
+docker compose -f docker-compose.dev.yml exec api python -m app.evals.run
+
+# Markdown-репорт в файл
+docker compose -f docker-compose.dev.yml exec api python -m app.evals.run > /tmp/eval_report.md
 ```
+
+Метрики: pass rate, MAPE per macro (kcal/protein/fat/carbs), within ±10/20%, source breakdown. Детали методологии и A/B-экспериментов с промптами — [`docs/EVALS.md`](docs/EVALS.md).
 
 ---
 
@@ -323,28 +369,32 @@ uv run python -m app.evals.run --output results.json
 
 | Требование | Статус | Где |
 |---|---|---|
-| LangGraph workflow с ветвлениями | ✅ | `backend/app/graph/` |
-| MCP-сервер с 2+ tools | ✅ | `backend/app/mcp/` (4 tools) |
-| Skill с SKILL.md | ✅ | `backend/app/skill/` (KZ блюда) |
-| RAG-пайплайн | ✅ | `backend/app/rag/` (Qdrant) |
-| Обработка документов / скрапинг | ✅ | USDA seed + OFF API |
-| Мультимодальность | ✅ | GPT-4o Vision + Whisper |
-| LangSmith трейсинг | ✅ | все LLM-вызовы |
-| Golden dataset 30+ примеров + 2 метрики | ✅ | `backend/app/evals/` |
-| A/B эксперимент | ✅ | GPT-4o vs GPT-4o-mini Vision |
+| LangGraph workflow с ветвлениями | ✅ | `backend/app/graph/graph.py` (meal) + `recommender.py` (RAG subgraph) |
+| MCP-сервер с 2+ tools | ⏳ | `backend/app/mcp/` (планируется) |
+| Skill с SKILL.md | ⏳ | планируется (KZ-блюда skill) |
+| RAG-пайплайн | ✅ | `backend/app/rag/` (Qdrant + auto-index hook) |
+| Обработка документов / скрапинг | ✅ | OFF API + FatSecret + кураторский seed |
+| Мультимодальность | ✅ | GPT-4o Vision (фото + штрих-код + весы) + Whisper |
+| LangSmith трейсинг | ✅ | через `@traceable`/`langsmith` env-vars |
+| Golden dataset 30+ примеров + 2 метрики | ✅ | `backend/app/evals/golden.jsonl` (44 кейса), pass rate + MAPE |
+| A/B эксперимент | ✅ | 6 экспериментов с промптами, `docs/EVALS.md` §4 (37→95.5%) |
 | Обоснованный выбор LLM + гиперпараметров | ✅ | `docs/specification.md` §13 |
-| Web/mobile frontend | ✅ | `frontend/` + Telegram Mini App |
-| Guardrails (бонус) | ✅ | keyword + range checks |
-| Docker + docker-compose (бонус) | ✅ | корень репо |
+| Web/mobile frontend | ✅ | `frontend/` + Telegram Mini App (4 экрана) |
+| Guardrails (бонус) | ✅ | LLM_ESTIMATE ephemeral, source-priority lookup, Python-эвристика is_food |
+| Docker + docker-compose (бонус) | ✅ | `docker-compose.yml` + `docker-compose.dev.yml` |
 | CI/CD с evals на PR (бонус) | ✅ | `.github/workflows/` |
 | Деплой на публичный URL (бонус) | ✅ | Railway + Vercel |
+| Recommender (бонус) | ✅ | `/recommend` + daily nudge + post-meal + variety alert |
 
 ---
 
 ## Документация
 
 - [Полное ТЗ](docs/specification.md)
+- [Eval-методология и метрики](docs/EVALS.md)
+- [Mini App — экраны, API, локальный запуск](docs/MINI_APP.md)
 - [Архитектурные варианты](docs/ARCHITECTURE_VARIANTS.md)
 - [Конкурентность БД](docs/DATABASE_CONCURRENCY.md)
 - [Поиск продуктов](docs/NUTRITION_LOOKUP.md)
+- [Value proposition](docs/VALUE_PROPOSITION.md)
 - [Требования курса](docs/project%20requirements.md)

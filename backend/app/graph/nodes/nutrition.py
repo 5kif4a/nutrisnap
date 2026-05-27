@@ -1,4 +1,4 @@
-"""nutrition_fetch_node — multi-source lookup chain (local → OFF → estimate).
+"""nutrition_fetch_node — multi-source lookup chain (local → OFF → FatSecret → estimate).
 
 For every parsed item, resolves nutrition KBJU by trying sources in priority order
 and computes the per-item nutrition payload using `compute_meal_item_nutrition`.
@@ -12,12 +12,12 @@ from app.db.models import Food, FoodSource
 from app.db.session import async_session_factory
 from app.graph.state import GraphState, ResolvedItem
 from app.repositories.food_repo import (
-    ExternalFoodPayload,
     lookup_food_by_barcode,
     search_foods_by_name,
     upsert_food_from_external,
 )
 from app.repositories.meal_repo import MealItemPayload
+from app.services import fatsecret as fs
 from app.services import openfoodfacts as off
 from app.services.nutrition_calc import compute_meal_item_nutrition
 from app.services.openai_client import ParsedFoodItem, estimate_nutrition
@@ -56,6 +56,9 @@ async def _resolve_one_item(session, item: ParsedFoodItem) -> ResolvedItem | Non
         logger.warning("Cannot compute nutrition for %s: %s", item.name, exc)
         return None
 
+    # Ephemeral (LLM-estimated) foods have no DB row — store the MealItem
+    # snapshot with food_id=NULL so we never reference a non-existent row.
+    food_persisted = food.id is not None
     payload = MealItemPayload(
         food_name=food.name,
         amount=item.amount,
@@ -65,12 +68,12 @@ async def _resolve_one_item(session, item: ParsedFoodItem) -> ResolvedItem | Non
         protein_g=nutrition.protein_g,
         fat_g=nutrition.fat_g,
         carbs_g=nutrition.carbs_g,
-        food_id=food.id,
+        food_id=food.id if food_persisted else None,
     )
     return ResolvedItem(
         payload=payload,
         source=food.source,
-        food_id_known=True,
+        food_id_known=food_persisted,
     )
 
 
@@ -98,18 +101,31 @@ async def _resolve_food(session, item: ParsedFoodItem) -> Food | None:
     if off_results:
         return await upsert_food_from_external(session, off_results[0])
 
-    # 5) LLM estimate as last resort — ask gpt-4o-mini for typical KBJU.
+    # 5) FatSecret text search — covers EN-only / branded items that OFF misses.
+    # No-op (returns []) when credentials are not configured, so the chain
+    # stays valid in dev without leaking errors.
+    fs_results = await fs.search_foods_by_text(item.name, limit=1)
+    if fs_results:
+        return await upsert_food_from_external(session, fs_results[0])
+
+    # 6) LLM estimate as last resort — ask gpt-4o-mini for typical KBJU.
+    # NOTE: LLM estimates are intentionally NOT persisted to `foods`. Otherwise
+    # a fake row (e.g. "шоколадка 100 ккал") would win subsequent local lookups
+    # for similar-sounding queries and freeze that hallucination forever.
+    # The ephemeral Food has id=None so the resulting MealItem is saved with
+    # food_id=NULL (it's a snapshot — no foreign key into the catalog).
     estimate = await estimate_nutrition(item.name)
-    payload = ExternalFoodPayload(
+    return Food(
         name=estimate.name,
+        aliases=[],
+        brand=item.brand,
+        barcode=item.barcode,
         metric=estimate.metric,
         kcal=estimate.kcal,
         protein_g=estimate.protein_g,
         fat_g=estimate.fat_g,
         carbs_g=estimate.carbs_g,
         piece_weight_g=estimate.piece_weight_g,
+        servings=[],
         source=FoodSource.LLM_ESTIMATE,
-        brand=item.brand,
-        barcode=item.barcode,
     )
-    return await upsert_food_from_external(session, payload)

@@ -56,11 +56,9 @@ USER app
 
 EXPOSE 8000
 
-# Default HEALTHCHECK assumes the API service (uvicorn on :8000).
-# The bot service in docker-compose overrides this with its own check.
-# Use an external script to avoid quoting/escaping problems with `python -c`.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD ["python", "/app/scripts/healthcheck.py"]
+# No image-level HEALTHCHECK — the port is fixed (8000) in docker-compose, but
+# Railway assigns a dynamic $PORT, so a hard-coded probe would always fail there.
+# docker-compose.dev.yml and Railway both define their own healthchecks.
 
 # tini proxies signals so uvicorn / ptb shut down gracefully on SIGTERM.
 ENTRYPOINT ["/usr/bin/tini", "--"]

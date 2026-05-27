@@ -16,13 +16,17 @@ HELP_TEXT = (
 )
 
 
-async def handle_help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_help_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     if update.effective_message is None:
         return
     await update.effective_message.reply_text(HELP_TEXT)
 
 
-async def handle_open_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_open_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     if update.effective_message is None:
         return
     if not settings.MINI_APP_URL.startswith("https://"):
@@ -47,7 +51,9 @@ async def handle_open_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 
-async def handle_today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_today_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     if update.effective_message is None:
         return
     # TODO: реальная сводка из БД через get_daily_summary MCP tool
@@ -56,10 +62,10 @@ async def handle_today_command(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
 
-async def handle_week_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_week_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     if update.effective_message is None:
         return
     # TODO: weekly summary
-    await update.effective_message.reply_text(
-        "📊 Сводка за неделю будет здесь (скоро)"
-    )
+    await update.effective_message.reply_text("📊 Сводка за неделю будет здесь (скоро)")

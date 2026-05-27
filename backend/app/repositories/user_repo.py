@@ -8,9 +8,7 @@ from app.services.nutrition_targets import compute_daily_targets
 
 
 async def get_user_by_tg_id(session: AsyncSession, telegram_id: int) -> User | None:
-    return await session.scalar(
-        select(User).where(User.telegram_id == telegram_id)
-    )
+    return await session.scalar(select(User).where(User.telegram_id == telegram_id))
 
 
 async def upsert_user_from_telegram(session: AsyncSession, tg: TgUser) -> User:
@@ -50,14 +48,21 @@ async def save_user_profile(
     activity: ActivityLevel,
     goal: Goal,
     target_weight_kg: float | None = None,
+    manual_targets: bool = False,
+    target_kcal: int | None = None,
+    target_protein_g: int | None = None,
+    target_fat_g: int | None = None,
+    target_carbs_g: int | None = None,
 ) -> User:
-    """Persist onboarding profile and recompute daily targets.
+    """Persist onboarding profile and (re)set daily targets.
 
     `target_weight_kg` is only meaningful for LOSE / GAIN goals. For MAINTAIN
     we ignore whatever is passed and store NULL.
-    """
-    targets = compute_daily_targets(sex, weight_kg, height_cm, age, activity, goal)
 
+    Daily targets: if `manual_targets=True` and all four target_* values are
+    provided, they are stored as-is. Otherwise targets are recomputed from
+    sex / weight / height / age / activity / goal via Mifflin-St Jeor.
+    """
     user.sex = sex
     user.weight_kg = weight_kg
     user.height_cm = height_cm
@@ -65,10 +70,22 @@ async def save_user_profile(
     user.activity = activity
     user.goal = goal
     user.target_weight_kg = target_weight_kg if goal is not Goal.MAINTAIN else None
-    user.tdee_kcal = targets.tdee_kcal
-    user.target_protein_g = targets.protein_g
-    user.target_fat_g = targets.fat_g
-    user.target_carbs_g = targets.carbs_g
+
+    manual_complete = manual_targets and all(
+        v is not None
+        for v in (target_kcal, target_protein_g, target_fat_g, target_carbs_g)
+    )
+    if manual_complete:
+        user.tdee_kcal = target_kcal
+        user.target_protein_g = target_protein_g
+        user.target_fat_g = target_fat_g
+        user.target_carbs_g = target_carbs_g
+    else:
+        targets = compute_daily_targets(sex, weight_kg, height_cm, age, activity, goal)
+        user.tdee_kcal = targets.tdee_kcal
+        user.target_protein_g = targets.protein_g
+        user.target_fat_g = targets.fat_g
+        user.target_carbs_g = targets.carbs_g
 
     await session.commit()
     await session.refresh(user)

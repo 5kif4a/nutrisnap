@@ -15,8 +15,6 @@ Saves via `save_user_profile`, which uses `compute_daily_targets` (Mifflin-St Je
 
 from __future__ import annotations
 
-from enum import IntEnum
-
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 from telegram.ext import (
     CallbackQueryHandler,
@@ -27,6 +25,8 @@ from telegram.ext import (
     filters,
 )
 
+from app.bot.handlers.onboard_state import OnboardStep as _Step
+from app.bot.handlers.start import handle_start_command
 from app.core.config import settings
 from app.db.models import ActivityLevel, Goal, Sex
 from app.db.session import async_session_factory
@@ -35,17 +35,6 @@ from app.repositories.user_repo import (
     save_user_profile,
     upsert_user_from_telegram,
 )
-
-
-class _Step(IntEnum):
-    SEX = 0
-    WEIGHT = 1
-    HEIGHT = 2
-    AGE = 3
-    ACTIVITY = 4
-    GOAL = 5
-    # Only reached when goal is LOSE or GAIN; MAINTAIN skips straight to save.
-    TARGET_WEIGHT = 6
 
 
 _ACTIVITY_LABELS: dict[ActivityLevel, str] = {
@@ -90,6 +79,7 @@ async def _mark_answered(update: Update, choice_label: str) -> None:
 
 # ─── Entry points ────────────────────────────────────────────────────────────
 
+
 async def start_onboarding_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
@@ -125,6 +115,7 @@ async def start_onboarding_from_button(
 
 
 # ─── State handlers ──────────────────────────────────────────────────────────
+
 
 async def handle_sex_selection(
     update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -182,13 +173,21 @@ async def handle_age_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return _Step.AGE
     age = _parse_positive_int(update.effective_message.text)
     if age is None or not 10 <= age <= 120:
-        await update.effective_message.reply_text("Не похоже на возраст. Напиши число от 10 до 120")
+        await update.effective_message.reply_text(
+            "Не похоже на возраст. Напиши число от 10 до 120"
+        )
         return _Step.AGE
     context.user_data["onboard_age"] = age
 
     keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton(label, callback_data=f"onboard_activity:{level.value}")]
-         for level, label in _ACTIVITY_LABELS.items()]
+        [
+            [
+                InlineKeyboardButton(
+                    label, callback_data=f"onboard_activity:{level.value}"
+                )
+            ]
+            for level, label in _ACTIVITY_LABELS.items()
+        ]
     )
     await update.effective_message.reply_text(
         "🏃 Какой у тебя уровень активности?", reply_markup=keyboard
@@ -208,8 +207,10 @@ async def handle_activity_selection(
 
     await _mark_answered(update, _ACTIVITY_LABELS[activity])
     keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton(label, callback_data=f"onboard_goal:{goal.value}")]
-         for goal, label in _GOAL_LABELS.items()]
+        [
+            [InlineKeyboardButton(label, callback_data=f"onboard_goal:{goal.value}")]
+            for goal, label in _GOAL_LABELS.items()
+        ]
     )
     await query.message.reply_text("🎯 Какая у тебя цель?", reply_markup=keyboard)
     return _Step.GOAL
@@ -232,8 +233,9 @@ async def handle_goal_selection(
     if goal is not Goal.MAINTAIN:
         current_weight = context.user_data.get("onboard_weight")
         prompt = (
-            "🎯 Какой у тебя целевой вес в кг?\n\n"
-            f"Сейчас: {current_weight:g} кг" if current_weight else "🎯 Какой у тебя целевой вес в кг?"
+            f"🎯 Какой у тебя целевой вес в кг?\n\nСейчас: {current_weight:g} кг"
+            if current_weight
+            else "🎯 Какой у тебя целевой вес в кг?"
         )
         await query.message.reply_text(prompt)
         return _Step.TARGET_WEIGHT
@@ -345,16 +347,19 @@ async def _finalize_onboarding(
 
     if chat_id is not None:
         await context.bot.send_message(
-            chat_id=chat_id, text=summary, parse_mode="Markdown", reply_markup=reply_markup
+            chat_id=chat_id,
+            text=summary,
+            parse_mode="Markdown",
+            reply_markup=reply_markup,
         )
     return ConversationHandler.END
 
 
-async def cancel_onboarding(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> int:
+async def cancel_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.effective_message:
-        await update.effective_message.reply_text("Отменил расчёт. Можно повторить через /onboard")
+        await update.effective_message.reply_text(
+            "Отменил расчёт. Можно повторить через /onboard"
+        )
     for k in (
         "onboard_sex",
         "onboard_weight",
@@ -369,10 +374,8 @@ async def cancel_onboarding(
 
 # ─── Wiring ──────────────────────────────────────────────────────────────────
 
-def build_onboarding_handler() -> ConversationHandler:
-    # Imported here to avoid a circular import (start.py imports `_Step` from this module).
-    from app.bot.handlers.start import handle_start_command
 
+def build_onboarding_handler() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[
             CommandHandler("start", handle_start_command),
@@ -393,22 +396,27 @@ def build_onboarding_handler() -> ConversationHandler:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_age_input),
             ],
             _Step.ACTIVITY: [
-                CallbackQueryHandler(handle_activity_selection, pattern=r"^onboard_activity:"),
+                CallbackQueryHandler(
+                    handle_activity_selection, pattern=r"^onboard_activity:"
+                ),
             ],
             _Step.GOAL: [
                 CallbackQueryHandler(handle_goal_selection, pattern=r"^onboard_goal:"),
             ],
             _Step.TARGET_WEIGHT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_target_weight_input),
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND, handle_target_weight_input
+                ),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel_onboarding)],
         name="onboarding",
-        persistent=False,
+        persistent=True,
     )
 
 
 # ─── Internals ───────────────────────────────────────────────────────────────
+
 
 def _parse_positive_float(text: str) -> float | None:
     try:

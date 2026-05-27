@@ -84,7 +84,7 @@ nutrisnap/
 
 ```
 1. PostgreSQL local cache       (~80% после прогрева)
-2. Qdrant RAG (USDA + KZ seed)
+2. Qdrant RAG (curated regional + raw foods seed)
 3. Open Food Facts (barcode)    ← главное для упаковок (President, Coca-Cola)
 4. Open Food Facts (text)
 5. FatSecret API                ← fallback для редких EN-only продуктов

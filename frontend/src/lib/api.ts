@@ -1,8 +1,12 @@
 import { getInitData } from "../telegram";
 import type {
   DayResponse,
+  MealOut,
+  MealType,
   MonthResponse,
   ProfileUpdate,
+  QuickAddFoodOut,
+  QuickAddRequest,
   UserProfile,
 } from "../types";
 
@@ -43,4 +47,47 @@ export const api = {
 
   deleteMeal: (id: string) =>
     request<void>(`/api/meal/${id}`, { method: "DELETE" }),
+
+  getRecentFoods: (params?: { mealType?: MealType; limit?: number }) =>
+    request<QuickAddFoodOut[]>(
+      `/api/foods/recent${buildQuery({
+        meal_type: params?.mealType,
+        limit: params?.limit,
+      })}`,
+    ),
+
+  getFrequentFoods: (params?: {
+    mealType?: MealType;
+    days?: number;
+    limit?: number;
+  }) =>
+    request<QuickAddFoodOut[]>(
+      `/api/foods/frequent${buildQuery({
+        meal_type: params?.mealType,
+        days: params?.days,
+        limit: params?.limit,
+      })}`,
+    ),
+
+  searchFoods: (params: { q: string; limit?: number }) =>
+    request<QuickAddFoodOut[]>(
+      `/api/foods/search${buildQuery({ q: params.q, limit: params.limit })}`,
+    ),
+
+  quickAddMeal: (payload: QuickAddRequest) =>
+    request<MealOut>(`/api/meals/quick-add`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 };
+
+function buildQuery(params: Record<string, string | number | undefined>): string {
+  const entries = Object.entries(params).filter(
+    ([, v]) => v !== undefined && v !== null,
+  );
+  if (entries.length === 0) return "";
+  return (
+    "?" +
+    entries.map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join("&")
+  );
+}

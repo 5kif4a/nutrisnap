@@ -53,11 +53,10 @@ class InputSource(StrEnum):
 
 
 class FoodSource(StrEnum):
-    CURATED = "curated"          # hand-seeded by team (regional cuisines, popular dishes)
-    USDA = "usda"                # USDA FoodData Central
-    OPEN_FOOD_FACTS = "off"      # OFF API (barcode / text)
-    FATSECRET = "fatsecret"      # FatSecret API
-    CUSTOM = "custom"            # user-generated (UGC)
+    CURATED = "curated"  # hand-seeded by team (regional cuisines, popular dishes)
+    OPEN_FOOD_FACTS = "off"  # OFF API (barcode / text)
+    FATSECRET = "fatsecret"  # FatSecret API
+    CUSTOM = "custom"  # user-generated (UGC)
     USER_RECIPE = "user_recipe"  # cooked dish saved by user via recipe-builder flow
     LLM_ESTIMATE = "llm_estimate"  # GPT-mini fallback estimate
 
@@ -68,17 +67,16 @@ class FoodMetric(StrEnum):
     - GRAMS / MILLILITERS: nutrition values are stored per 100 units of this metric.
     - PIECE / SERVING: nutrition values are stored per 1 unit (one egg, one portion).
     """
-    GRAMS = "g"           # per 100g (typical: meat, vegetables, grains)
-    MILLILITERS = "ml"    # per 100ml (typical: milk, juice, oil)
-    PIECE = "piece"       # per 1 piece (typical: egg, banana, slice of bread)
-    SERVING = "serving"   # per 1 serving (typical: ready meal, fast food item)
+
+    GRAMS = "g"  # per 100g (typical: meat, vegetables, grains)
+    MILLILITERS = "ml"  # per 100ml (typical: milk, juice, oil)
+    PIECE = "piece"  # per 1 piece (typical: egg, banana, slice of bread)
+    SERVING = "serving"  # per 1 serving (typical: ready meal, fast food item)
 
 
 class User(UuidPkMixin, TimestampsMixin, Base):
     __tablename__ = "users"
-    __table_args__ = (
-        UniqueConstraint("telegram_id", name="uq_users_telegram_id"),
-    )
+    __table_args__ = (UniqueConstraint("telegram_id", name="uq_users_telegram_id"),)
 
     telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
     username: Mapped[str | None] = mapped_column(String(64))
@@ -128,9 +126,7 @@ class Meal(UuidPkMixin, TimestampsMixin, Base):
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     meal_type: Mapped[MealType] = mapped_column(String(16), nullable=False)
-    eaten_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=False
-    )
+    eaten_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
     source: Mapped[InputSource] = mapped_column(String(16), nullable=False)
     raw_input: Mapped[str | None] = mapped_column(Text)
     tg_message_id: Mapped[int | None] = mapped_column(BigInteger)
@@ -151,7 +147,9 @@ class MealItem(UuidPkMixin, TimestampsMixin, Base):
 
     # What the user said (snapshot of input)
     amount: Mapped[float] = mapped_column(nullable=False)  # e.g. 200, 1, 2.5
-    unit: Mapped[FoodMetric] = mapped_column(String(16), nullable=False)  # g | ml | piece | serving
+    unit: Mapped[FoodMetric] = mapped_column(
+        String(16), nullable=False
+    )  # g | ml | piece | serving
 
     # Canonical equivalent in grams (used for daily totals and analytics)
     weight_g: Mapped[float] = mapped_column(nullable=False)

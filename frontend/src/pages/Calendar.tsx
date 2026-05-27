@@ -1,3 +1,4 @@
+import { ArrowLeft } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api";
 import {
@@ -11,6 +12,7 @@ import type { DayStatus, MonthResponse } from "../types";
 
 interface Props {
   onSelectDay: (iso: string) => void;
+  onBack: () => void;
 }
 
 const WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
@@ -29,7 +31,7 @@ const LEGEND: { status: DayStatus; label: string }[] = [
   { status: "empty", label: "Нет записей" },
 ];
 
-export function Calendar({ onSelectDay }: Props) {
+export function Calendar({ onSelectDay, onBack }: Props) {
   const [month, setMonth] = useState(thisMonth());
   const [data, setData] = useState<MonthResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -52,21 +54,32 @@ export function Calendar({ onSelectDay }: Props) {
   const today = todayISO();
 
   return (
-    <div className="mx-auto max-w-md px-4 pb-24 pt-4">
-      <div className="mb-4 flex items-center justify-between">
+    <div className="mx-auto max-w-md px-4 pb-32 pt-4">
+      {/* Header — back to dashboard on the left, month nav on the right.
+          pr-12 leaves space for the global gear icon (top-right). */}
+      <div className="mb-4 flex items-center gap-2 pr-12">
+        <button
+          onClick={onBack}
+          aria-label="К дневнику"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-tg-card text-tg-text shadow-sm"
+        >
+          <ArrowLeft size={18} />
+        </button>
         <button
           onClick={() => setMonth((m) => shiftMonth(m, -1))}
-          className="rounded-full bg-tg-card px-3 py-1.5 text-tg-text shadow-sm"
+          aria-label="Предыдущий месяц"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-tg-card text-tg-text shadow-sm"
         >
           ‹
         </button>
-        <span className="font-semibold capitalize text-tg-text">
+        <span className="flex-1 text-center font-semibold capitalize text-tg-text">
           {monthLabel(month)}
         </span>
         <button
           onClick={() => setMonth((m) => shiftMonth(m, 1))}
           disabled={isFuture}
-          className="rounded-full bg-tg-card px-3 py-1.5 text-tg-text shadow-sm disabled:opacity-30"
+          aria-label="Следующий месяц"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-tg-card text-tg-text shadow-sm disabled:opacity-30"
         >
           ›
         </button>

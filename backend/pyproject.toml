@@ -15,7 +15,7 @@ dependencies = [
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.1",
     "python-multipart>=0.0.28",
-    "python-telegram-bot>=22.7",
+    "python-telegram-bot[job-queue]>=22.7",
     "qdrant-client>=1.18.0",
     "sqlalchemy[asyncio]>=2.0.49",
     "uvicorn[standard]>=0.47.0",
@@ -23,7 +23,39 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "pylint>=4.0.5",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
     "ruff>=0.15.13",
 ]
+
+[tool.pylint."MESSAGES CONTROL"]
+# Disabled checks fall into three buckets:
+#   1. Style we intentionally don't follow (no-docstring everywhere, etc.)
+#   2. False positives for libraries pylint doesn't statically understand
+#      (SQLAlchemy `func.X()` factory, python-telegram-bot's mandatory
+#      `context` callback arg that's often unused by design).
+#   3. Domain-noise rules (`too-many-instance-attributes` for dataclasses,
+#      `duplicate-code` for handler boilerplate that's clearer when explicit).
+disable = [
+    # 1. Style we don't enforce
+    "missing-module-docstring",         # C0114
+    "missing-class-docstring",          # C0115
+    "missing-function-docstring",       # C0116
+    "fixme",                            # W0511 — `# TODO` comments are fine
+    # 2. False positives
+    "not-callable",                     # E1102 — sqlalchemy.func.X() factory
+    "unused-argument",                  # W0613 — PTB callbacks must accept `context`
+    "broad-exception-caught",           # W0718 — graph nodes / bot handlers / eval
+                                        # runner are boundary catch-alls by design
+    # 3. Domain-noise
+    "too-few-public-methods",           # R0903 — dataclasses
+    "too-many-instance-attributes",     # R0902 — domain dataclasses (Meal, Food, ...)
+    "too-many-arguments",               # R0913
+    "too-many-locals",                  # R0914
+    "too-many-positional-arguments",    # R0917
+    "duplicate-code",                   # R0801 — handler boilerplate
+]
+
+[tool.pylint.FORMAT]
+max-line-length = 120
