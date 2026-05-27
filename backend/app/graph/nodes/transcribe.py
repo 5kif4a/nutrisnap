@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import logging
 
+from langsmith import traceable
+
 from app.graph.state import GraphState
 from app.services.openai_client import transcribe_voice
 
 logger = logging.getLogger(__name__)
 
 
+@traceable(run_type="chain", name="node_transcribe_voice")
 async def transcribe_voice_node(state: GraphState) -> GraphState:
     audio = state.get("voice_bytes")
     if not audio:

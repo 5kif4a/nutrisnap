@@ -7,6 +7,7 @@ import io
 import logging
 from datetime import datetime, timezone
 
+from langsmith import traceable
 from telegram import Update
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
@@ -47,6 +48,18 @@ from app.services.photo_buffer import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@traceable(run_type="chain", name="meal_graph")
+async def _invoke_meal_graph(state: dict) -> dict:
+    """Single LangSmith parent run wrapping the full graph invocation.
+
+    Each node already has its own `@traceable` so the LangSmith trace tree
+    becomes: meal_graph → node_route → node_X → ... → node_finalize, with
+    every LLM call nested under its node.
+    """
+    graph = get_meal_graph()
+    return await graph.ainvoke(state)
 
 
 async def handle_photo_message(
@@ -515,8 +528,7 @@ async def _run_graph_and_post(
         state.setdefault("user_id", str(user.id))
 
     try:
-        graph = get_meal_graph()
-        result = await graph.ainvoke(state)
+        result = await _invoke_meal_graph(state)
     except Exception:
         # Real class name goes to logs / LangSmith; the user sees a friendly
         # generic message instead of "InternalServerError: 500" gibberish.

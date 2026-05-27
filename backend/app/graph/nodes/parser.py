@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+from langsmith import traceable
+
 from app.graph.state import GraphState
 from app.services.openai_client import parse_text_meal
 
@@ -53,6 +55,7 @@ def _looks_like_non_food(text: str) -> bool:
     return any(lower.startswith(kw) for kw in _NON_FOOD_KEYWORDS)
 
 
+@traceable(run_type="chain", name="node_parse_text")
 async def parse_text_node(state: GraphState) -> GraphState:
     text = (state.get("text_input") or state.get("transcribed_text") or "").strip()
     if not text:

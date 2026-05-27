@@ -52,24 +52,31 @@ async def lookup_food_by_barcode(barcode: str) -> ExternalFoodPayload | None:
 
 
 async def search_foods_by_text(
-    query: str, *, limit: int = 5
+    query: str, *, brand: str | None = None, limit: int = 5
 ) -> list[ExternalFoodPayload]:
-    """Text search via OFF's search endpoint. Returns ExternalFoodPayload list."""
+    """Text search via OFF's search endpoint.
+
+    When `brand` is provided, results are hard-filtered to entries whose
+    `brands` field contains the brand (case-insensitive substring match).
+    This stops fuzzy name-only matches like "Maxler протеин" silently
+    returning a болгарский йогурт because "протеин" appears in its name.
+    """
     client = get_off_client()
+    search_query = f"{brand} {query}" if brand else query
     try:
         resp = await client.get(
             "/cgi/search.pl",
             params={
-                "search_terms": query,
+                "search_terms": search_query,
                 "search_simple": 1,
                 "action": "process",
                 "json": 1,
-                "page_size": limit,
+                "page_size": max(limit, 10) if brand else limit,
                 "lc": "ru",
             },
         )
     except httpx.HTTPError as exc:
-        logger.warning("OFF text search failed for %r: %s", query, exc)
+        logger.warning("OFF text search failed for %r: %s", search_query, exc)
         return []
 
     if resp.status_code != 200:
@@ -77,10 +84,17 @@ async def search_foods_by_text(
 
     products = resp.json().get("products", [])
     payloads: list[ExternalFoodPayload] = []
+    brand_needle = brand.casefold() if brand else None
     for product in products:
+        if brand_needle is not None:
+            brands_field = (product.get("brands") or "").casefold()
+            if brand_needle not in brands_field:
+                continue
         mapped = _map_off_product(product, barcode=product.get("code"))
         if mapped is not None:
             payloads.append(mapped)
+        if len(payloads) >= limit:
+            break
     return payloads
 
 

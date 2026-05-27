@@ -7,6 +7,7 @@ prompt, response, tokens and latency without manual instrumentation.
 from __future__ import annotations
 
 import base64
+import logging
 from functools import lru_cache
 from typing import Literal
 
@@ -16,6 +17,8 @@ from pydantic import BaseModel, Field
 
 from app.core.config import settings
 from app.db.models import FoodMetric
+
+logger = logging.getLogger(__name__)
 
 
 # ─── Output schemas (structured-output contract with the LLM) ────────────────
@@ -39,8 +42,28 @@ class ParsedFoodItem(BaseModel):
 
 
 class PhotoMealResult(BaseModel):
-    """Output of analyze_photo_meal — list of items detected on the plate."""
+    """Output of analyze_photo_meal — items + built-in guiderail verdicts.
 
+    The vision call also serves as the photo guiderail (one LLM call instead of
+    a separate cheap-check pass). When `is_food_image=False` or `is_safe_image=False`,
+    `items` MUST be empty and the graph routes to error_node.
+    """
+
+    is_food_image: bool = Field(
+        default=True,
+        description=(
+            "True only when the photo actually contains food / drinks / packaged "
+            "groceries / kitchen scale with food. Memes, screenshots, selfies, "
+            "landscapes, pets, random objects → False."
+        ),
+    )
+    is_safe_image: bool = Field(
+        default=True,
+        description=(
+            "False when the photo contains NSFW, violence, abuse, or other "
+            "disallowed content. Default True for normal food photos."
+        ),
+    )
     items: list[ParsedFoodItem]
     overall_description: str = Field(
         default="",
@@ -73,227 +96,102 @@ def get_openai_client() -> AsyncOpenAI:
 # ─── Prompts ─────────────────────────────────────────────────────────────────
 
 _VISION_SYSTEM_PROMPT = """\
-You are NutriSnap's nutrition vision analyzer. Identify every food / dish / drink
-on the photo and estimate the portion size.
+You are NutriSnap's nutrition vision analyzer. Identify every food / dish /
+drink on the photo and estimate the portion size.
 
-══════════════════════════════════════════════════════════════════════════════
-PRIORITY ORDER — read these signals in order; STOP at first hit per item
-══════════════════════════════════════════════════════════════════════════════
+STEP 0 — set the safety flags FIRST:
+  is_food_image=False for memes, screenshots, selfies, landscapes, pets,
+  random objects, drawings — anything that isn't food / drink / groceries.
+  is_safe_image=False for nudity, sexual, violence, gore, hate content.
+  When either is False: set items=[], overall_description="non-food" or
+  "unsafe content". STOP — do not invent food.
 
-1. **KITCHEN SCALE DISPLAY** (highest priority for amount)
-   If a digital scale shows a weight reading anywhere in the photo:
-     - READ the digits exactly from the LCD/LED display
-     - Most scales show grams; if 'oz' / 'ml' / 'lb' is visible on the screen,
-       use that unit and convert mentally (1 oz ≈ 28g, 1 lb ≈ 454g)
-     - Use that number as `amount`, with `unit=g` (or `ml` for liquids)
-     - This OVERRIDES visual estimation completely. `confidence` ≥ 0.95
-     - Watch for digit ambiguity: 8↔0, 5↔6, 3↔8 — re-check segments
-     - Decimal separator is usually a dot or comma — both mean fraction of gram
-     - If TWO scales are visible (e.g., user weighed two ingredients separately),
-       associate each weight with the food on that scale; create separate items
-   - If the dish is on the scale and contains ingredients you can identify,
-     STILL use the scale weight as the total dish amount (do NOT split among
-     visible ingredients unless the user clearly weighed each one separately)
+When both flags are True, extract items using this priority for `amount`:
 
-2. **BARCODE on packaging**
-   If any barcode (EAN-13, EAN-8, UPC-A) is visible on a package:
-     - READ ALL barcode digits and put them in the `barcode` field exactly
-     - This lets the backend pull exact nutrition from Open Food Facts —
-       far more reliable than guessing KBJU visually
-     - Also extract `brand` from the package label
-     - Estimate `amount` from the package size if no scale is shown
-       (e.g., "Простоквашино Творожок 110г" → amount=110, unit=g)
+1. KITCHEN SCALE — if a digital scale shows a reading, READ the digits
+   exactly (watch 8↔0, 5↔6, 3↔8). Use that number, unit=g (or ml if shown).
+   confidence ≥ 0.95. Two scales = two weighed items. Dish on scale = use
+   total weight, don't split into ingredients unless each was weighed.
 
-3. **PACKAGING LABEL — brand and product name**
-   Even without a barcode, if you can read brand + product name from the
-   package, populate `brand` and `name`. Common Russian brands you may see:
-   Простоквашино, Натиже, Коровка из Кореновки, Мишка на Полюсе, Рахат,
-   Bonduelle, Makfa, President, Snickers, Twix, Nestle Nuts, Bombbar, Bootybar,
-   Maxler, Exponenta, Drinkit.
+2. BARCODE — if EAN/UPC visible, put ALL digits in `barcode`. Extract
+   `brand` from the label. Estimate `amount` from package size if no
+   scale (e.g. "Простоквашино Творожок 110г" → amount=110 unit=g).
 
-4. **VISUAL PORTION ESTIMATION** (last resort, only when nothing above works)
-   Use plate size (assume standard 25cm dinner plate), utensils, hand size as
-   reference. Confidence here should be ≤ 0.7.
-     - solid foods: `unit=g`
-     - liquids: `unit=ml`
-     - countable items (egg, banana, slice): `unit=piece`, `amount=N`
-     - ready meals where weight is hard to estimate: `unit=serving`
+3. PACKAGING LABEL — read brand + product name when visible. Common
+   brands: Простоквашино, Натиже, Коровка из Кореновки, Bonduelle, Makfa,
+   President, Snickers, Maxler, Bombbar, Drinkit.
 
-══════════════════════════════════════════════════════════════════════════════
-NAMING & OUTPUT RULES
-══════════════════════════════════════════════════════════════════════════════
+4. VISUAL ESTIMATION (last resort, confidence ≤ 0.7) — plate size 25cm,
+   utensils, hand as scale. solid=g, liquid=ml, countable=piece, ready
+   meal=serving.
 
-- Use Russian names for generic food ("куриная грудка", "гречка отварная",
-  "рис отварной"). Do NOT translate brand names — keep "Snickers", "Bonduelle".
-- For composite dishes (плов, борщ, тушёная курица с овощами) keep the dish
-  as ONE item with the total scale weight; do not split into ingredients
-  unless they were weighed separately.
-- `brand` field: only populate if a brand is actually visible on packaging.
-  Do not invent a brand from generic food appearance.
-- Output ONLY the structured result, no chit-chat.
+NAMING:
+- Russian names for generic foods ("куриная грудка", "гречка отварная").
+- Don't translate brand names ("Snickers", "Bonduelle").
+- Composite dishes (плов, борщ) = ONE item with total weight.
+- `brand` only when actually visible — don't invent.
+
+Output ONLY the structured result.
 """
 
 _TEXT_PARSER_SYSTEM_PROMPT = """\
-You parse short Telegram messages describing what the user ate into a structured
-list of food items. The user is a fitness-tracking adult who logs meals in
-Russian. They mostly weigh food in grams.
+You parse short Russian Telegram messages describing what the user ate into
+structured food items. The user is a fitness-tracking adult who weighs food
+in grams. Inedible / abuse / greetings are filtered upstream — assume the
+input is about food and parse what you can.
 
-──────────────────────────────────────────────────────────────────────────────
-CORE RULES — apply in this order
-──────────────────────────────────────────────────────────────────────────────
+RULES
+1. UNIT = grams by default. Any bare number is grams (start or end of line).
+   Use `ml` only for liquids with explicit "стакан"=250 / "бутылка"=500.
+   Use `piece` only with explicit counts ("2 яйца", "1 банан").
+   Use `serving` only with "порция".
+2. ONE LINE = ONE ITEM. Composite dishes ("Курица с овощами 95",
+   "Тушеная курица с овощами 153") stay whole. Split only when items are
+   comma-separated with their own weights OR joined by "и".
+3. MULTI-LINE = MULTIPLE ITEMS, one per line. Drop prefixes like "обед:".
+4. BRAND only when the word literally appears in the input (any case /
+   transliteration). Bare generic words ("nuts", "молоко", "хлеб",
+   "протеин") are NOT brands. Normalize Cyrillic transliterations to
+   canonical form: бондюэль→Bonduelle, макфа→Makfa, снайкерс/сникерс→Snickers,
+   максл/макслер→Maxler, президент→President, натиже→Natige,
+   белвита→Belvita, бомбар→Bombbar, рахат→Рахат, простоквашино→Простоквашино,
+   коровка из кореновки→Коровка из Кореновки, drinkit/драгкит→Drinkit.
+5. `name` ALWAYS keeps the head noun (protein, whey, йогурт, хлеб, гречка).
+   Never drop it even with a brand present — that's the biggest lookup
+   killer. "Maxler Ultra Whey 30" → name="Whey protein ultra", brand="Maxler".
+6. PRESERVE the user's wording inside `name` — keep declension as-is
+   ("улитки" stays "улитки", "улитка" stays "улитка"); only fix obvious typos.
+7. Supplements ARE food: whey, casein, creatine, protein bars, gainers.
 
-1. UNIT DEFAULT = GRAMS
-   Any bare number in a line is grams. Do NOT use `serving` or `piece` unless
-   the user explicitly typed "порция", "шт.", "штука", "стакан", "бутылка".
-   Implicit "г" / "гр" / "грамм" is the default.
+FEW-SHOTS (real user patterns — match these exactly)
 
-   Number can appear at the START or END of the line — either is grams.
-
-2. ONE LINE = ONE ITEM (compound dishes stay whole)
-   "Курица с овощами 95"           → ONE item: name="Курица с овощами", amount=95g
-   "Тушеная курица с овощами 153"  → ONE item, NOT 3 items
-   "Курица с морковью 110"         → ONE item, NOT курица+морковь split
-
-   Only split when items are clearly separated by commas with their own weights
-   OR explicit conjunctions like "и" between weighed items:
-   "200г курицы и 150г гречки"     → 2 items
-   "рис 150, курица 200, фасоль 50"→ 3 items
-   "обед: рис 150, курица 200"     → 2 items (drop "обед:" prefix)
-
-3. MULTI-LINE = MULTIPLE ITEMS (one per line)
-   "Макароны Макфа улитка 92\\nТушеная курица с овощами 153"
-   → 2 items, both unit=g, line 2 stays as ONE composite dish.
-
-4. BRAND EXTRACTION (always to a separate `brand` field)
-   Brands can appear anywhere in the line and in any case (lowercase too).
-   Always normalize to the canonical Latin form. Common aliases the user uses:
-
-     бондюэль / Бондюэль   → "Bonduelle"
-     макфа   / Макфа       → "Makfa"
-     снайкерс / сникерс     → "Snickers"
-     твикс                  → "Twix"
-     натс / nuts            → "Nestle" (brand=Nestle, name should include "Nuts")
-     максл / макслер / maxler → "Maxler"
-     президент / president  → "President"
-     натиже / natige        → "Natige"
-     простоквашино          → "Простоквашино"
-     драгкит / drinkit       → "Drinkit"
-     рахат                  → "Рахат"
-     белуччи / belucci      → "Belucci"
-     белвита / belvita      → "Belvita"
-     bombbar / бомбар       → "Bombbar"
-     bootybar / бутибар     → "Bootybar"
-     mishka на полюсе / мишка на полюсе → "Мишка на Полюсе"
-     коровка из кореновки   → "Коровка из Кореновки"
-     bitony / битони        → "Bitony"
-     ehrmann / эрманн       → "Ehrmann"
-     exponenta / экспонента → "Exponenta"
-     bonduelle              → "Bonduelle"
-
-   Brand goes into `brand`. `name` is the product type WITHOUT the brand word:
-   "Фасоль бондюэль 25"       → name="Фасоль", brand="Bonduelle", amount=25, unit=g
-   "Макароны Макфа улитка 92" → name="Макароны улитка", brand="Makfa", amount=92, unit=g
-   "50 гр макароны улитки макфа" → name="Макароны улитки", brand="Makfa", amount=50, unit=g
-   "Сметана President 10% 30" → name="Сметана 10%", brand="President", amount=30, unit=g
-   "Snickers 80"              → name="Snickers", brand="Snickers", amount=80, unit=g
-   "Nestle Nuts 66"           → name="Nuts", brand="Nestle", amount=66, unit=g
-   "Maxler Ultra Whey 30"     → name="Ultra Whey", brand="Maxler", amount=30, unit=g
-
-5. SUPPLEMENTS AND PROTEIN BARS ARE FOOD
-   Protein powders (whey, casein), creatine, mass gainers, protein bars,
-   meal-replacement drinks, energy bars — ALL count as food.
-   "Maxler Ultra Whey 30"  → is_food_related=TRUE, parse normally
-   "Креатин 5"             → is_food_related=TRUE
-   "Bombbar эскимо 70"     → is_food_related=TRUE
-   "Bootybar 60"           → is_food_related=TRUE
-
-6. PIECE / SERVING ONLY WHEN EXPLICIT
-   Use unit=piece only when user explicitly counts items: "съел 2 яйца",
-   "1 банан", "три ломтика хлеба".
-   Use unit=serving only for prepared food with a portion word: "порция плова",
-   "1 порция супа".
-   "стакан молока"   → amount=250, unit=ml
-   "бутылка колы"    → amount=500, unit=ml
-
-   NEVER default to piece/serving when a number is present — that number is grams.
-
-7. AMBIGUOUS / DESCRIPTIVE WORDS — do not invent splits
-   "большая", "маленькая", "целая" → adjectives, keep with the name, don't create extra items.
-   "nuts шоколадка большая" → 1 item: name="Nuts шоколадка", brand="Nestle",
-                              amount=1, unit=serving (no number given;
-                              fallback to 1 serving is OK ONLY when no number exists).
-
-8. is_food_related — DEFAULT TRUE
-   Set is_food_related=TRUE for ANY message that contains food, drinks, or
-   supplements (even a single word like "хлеб" is food). The schema default
-   is TRUE — only set it to FALSE for pure greetings/help-requests that
-   contain NO food or brand words:
-     "Привет"  /  "Спасибо"  /  "Что умеешь?"  /  "/start"
-   When in doubt, set is_food_related=TRUE and parse what you can.
-
-──────────────────────────────────────────────────────────────────────────────
-FORMAT EXAMPLES (canonical)
-──────────────────────────────────────────────────────────────────────────────
-Input → Output
-
-"Хлеб 53"
-  → [{name:"Хлеб", amount:53, unit:g}]
-
-"Курица с овощами 95"
-  → [{name:"Курица с овощами", amount:95, unit:g}]
-
-"Тушеная курица с овощами 153"
-  → [{name:"Тушеная курица с овощами", amount:153, unit:g}]
-
-"Курица с морковью 110"
-  → [{name:"Курица с морковью", amount:110, unit:g}]
-
-"Фасоль бондюэль 25"
-  → [{name:"Фасоль", brand:"Bonduelle", amount:25, unit:g}]
-
-"50 гр макароны улитки макфа"
-  → [{name:"Макароны улитки", brand:"Makfa", amount:50, unit:g}]
-
+"Хлеб 53"                       → [{name:"Хлеб", amount:53, unit:g}]
+"Курица с овощами 95"           → [{name:"Курица с овощами", amount:95, unit:g}]
+"Фасоль бондюэль 25"            → [{name:"Фасоль", brand:"Bonduelle", amount:25, unit:g}]
+"Макароны Макфа улитка 92"      → [{name:"Макароны улитка", brand:"Makfa", amount:92, unit:g}]
+"50 гр макароны улитки макфа"   → [{name:"Макароны улитки", brand:"Makfa", amount:50, unit:g}]
 "Макароны Макфа улитка 92\\nТушеная курица с овощами 153"
-  → [
-      {name:"Макароны улитка", brand:"Makfa", amount:92, unit:g},
-      {name:"Тушеная курица с овощами", amount:153, unit:g}
-    ]
+                                → [{name:"Макароны улитка", brand:"Makfa", amount:92, unit:g},
+                                   {name:"Тушеная курица с овощами", amount:153, unit:g}]
 
-"Snickers 80"  → [{name:"Snickers", brand:"Snickers", amount:80, unit:g}]
-"Nestle Nuts 66" → [{name:"Nuts", brand:"Nestle", amount:66, unit:g}]
-"Maxler Ultra Whey 30" → [{name:"Ultra Whey", brand:"Maxler", amount:30, unit:g}]
-"Сметана President 10% 30" → [{name:"Сметана 10%", brand:"President", amount:30, unit:g}]
-"Bombbar эскимо 70" → [{name:"Эскимо", brand:"Bombbar", amount:70, unit:g}]
-"Гречка отварная 150" → [{name:"Гречка отварная", amount:150, unit:g}]
+EDGE CASES
 
+"Nuts 66"                       → [{name:"Орехи", brand:null, amount:66, unit:g}]
+"Nestle Nuts 66"                → [{name:"Nuts шоколад", brand:"Nestle", amount:66, unit:g}]
+"Maxler Ultra Whey 30"          → [{name:"Whey protein ultra", brand:"Maxler", amount:30, unit:g}]
+"Протеин maxler ultra 30"       → [{name:"Протеин ultra", brand:"Maxler", amount:30, unit:g}]
+"Сметана President 10% 30"      → [{name:"Сметана 10%", brand:"President", amount:30, unit:g}]
 "Простоквашино творожок вишня-банан 110"
-  → [{name:"Творожок вишня-банан", brand:"Простоквашино", amount:110, unit:g}]
-"Коровка из Кореновки мороженое лакомка 100"
-  → [{name:"Мороженое лакомка", brand:"Коровка из Кореновки", amount:100, unit:g}]
-"Рахат зефир бело-розовый 40"
-  → [{name:"Зефир бело-розовый", brand:"Рахат", amount:40, unit:g}]
-"Belvita печенье какао 46"
-  → [{name:"Печенье какао", brand:"Belvita", amount:46, unit:g}]
-"Bitony пельмени говяжьи 170"
-  → [{name:"Пельмени говяжьи", brand:"Bitony", amount:170, unit:g}]
-"Bonduelle кукуруза сладкая 90"
-  → [{name:"Кукуруза сладкая", brand:"Bonduelle", amount:90, unit:g}]
-"Drinkit гриль-ролл 190"
-  → [{name:"Гриль-ролл", brand:"Drinkit", amount:190, unit:g}]
-"Кефир натиже 2,5% 350"
-  → [{name:"Кефир 2,5%", brand:"Natige", amount:350, unit:g}]
-"Креатин 5"
-  → [{name:"Креатин", amount:5, unit:g}]
-
+                                → [{name:"Творожок вишня-банан", brand:"Простоквашино", amount:110, unit:g}]
+"Кефир натиже 2,5% 350"         → [{name:"Кефир 2,5%", brand:"Natige", amount:350, unit:g}]
+"Креатин 5"                     → [{name:"Креатин", amount:5, unit:g}]
 "200г куриной грудки и 150г гречки"
-  → [{name:"Куриная грудка", amount:200, unit:g}, {name:"Гречка", amount:150, unit:g}]
+                                → [{name:"Куриная грудка", amount:200, unit:g},
+                                   {name:"Гречка", amount:150, unit:g}]
+"стакан молока"                 → [{name:"Молоко", amount:250, unit:ml}]
+"съел 2 яйца"                   → [{name:"Яйцо", amount:2, unit:piece}]
 
-"стакан молока" → [{name:"Молоко", amount:250, unit:ml}]
-"съел два яйца" → [{name:"Яйцо", amount:2, unit:piece}]
-"1 порция плова" → [{name:"Плов", amount:1, unit:serving}]
-
-"Привет, как дела?" → is_food_related:FALSE, items:[]
+If nothing parses, return items=[].
 """
 
 
@@ -361,25 +259,45 @@ async def analyze_photo_meal(
 
 @traceable(name="parse_text_meal", run_type="llm")
 async def parse_text_meal(text: str) -> TextParseResult:
-    """Parse free-form user text into structured food items."""
+    """Parse free-form user text into structured food items.
+
+    On `LengthFinishReasonError` (model emitted too many reasoning tokens
+    before the JSON), retry once with a stricter "be brief" reminder and
+    a higher cap — observed on short inputs where the model spiraled.
+    """
+    from openai import LengthFinishReasonError
+
     client = get_openai_client()
-    response = await client.beta.chat.completions.parse(
-        model=settings.TEXT_MODEL,
-        temperature=0.0,
-        # 500 was too tight for multi-line meals — the model would emit the
-        # opening JSON but get truncated mid-array, raising LengthFinishReason.
-        # 2000 gives headroom for ~15 items, still well under the model max.
-        max_tokens=2000,
-        response_format=TextParseResult,
-        messages=[
+
+    async def _call(*, max_tokens: int, terse: bool) -> TextParseResult:
+        messages: list[dict] = [
             {"role": "system", "content": _TEXT_PARSER_SYSTEM_PROMPT},
-            {"role": "user", "content": text},
-        ],
-    )
-    parsed = response.choices[0].message.parsed
-    if parsed is None:
-        return TextParseResult(items=[])
-    return parsed
+        ]
+        if terse:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "Output ONLY the JSON object matching the schema. "
+                        "No commentary, no markdown fences, no chain-of-thought."
+                    ),
+                }
+            )
+        messages.append({"role": "user", "content": text})
+        response = await client.beta.chat.completions.parse(
+            model=settings.TEXT_MODEL,
+            temperature=0.0,
+            max_tokens=max_tokens,
+            response_format=TextParseResult,
+            messages=messages,
+        )
+        return response.choices[0].message.parsed or TextParseResult(items=[])
+
+    try:
+        return await _call(max_tokens=4000, terse=False)
+    except LengthFinishReasonError:
+        logger.warning("parse_text_meal hit length limit, retrying terse")
+        return await _call(max_tokens=4000, terse=True)
 
 
 class NutritionEstimate(BaseModel):
@@ -475,39 +393,27 @@ class FoodIntentResult(BaseModel):
 
 
 _FOOD_INTENT_SYSTEM_PROMPT = """\
-You are a content gate for a meal-logging Telegram bot. Decide whether to let
-the message through to the food parser.
+Content gate for a meal-logging Telegram bot. Set is_food_intent=TRUE only
+when the message describes food / drinks / supplements (with or without an
+amount). Profanity as an intensifier next to real food is still food.
 
-Set is_food_intent=TRUE ONLY when the message describes one or more
-foods / drinks / supplements / dishes / cooking ingredients, with or without
-an amount. Profanity used as an intensifier alongside real food is still food.
-
-Set is_food_intent=FALSE for everything else:
- - GREETINGS / chit-chat / help requests
-   ("привет", "что умеешь", "как дела", "спасибо")
- - INEDIBLE substances (bodily waste, soap, sand, paint, garbage, plants
-   known to be inedible) — even if a number/grams is attached
-   ("кал слона 100", "говно 50", "земля 30", "мыло 20")
- - PURE PROFANITY / abuse without a real food noun
-   ("сука пиздец", "иди нахуй", "мудак")
- - NONSENSE / spam / single letters
+Otherwise set FALSE with `category`:
+  food      — real food
+  greeting  — hi / спасибо / что умеешь / /start
+  inedible  — bodily waste, soap, paint, sand, known-inedible plants
+              (also when grams are attached: "кал слона 100")
+  abuse     — pure profanity, no food noun
+  nonsense  — spam / single letters / gibberish
 
 Examples:
- "Курица 200"                 → food
- "Гречка отварная 150"        → food
- "Бургер был охуенный 300"    → food         (profanity modifies real food)
- "Ебать как вкусно курица 200" → food
- "Привет"                     → greeting
- "что ты умеешь"              → greeting
- "Спасибо"                    → greeting
- "Кал слона 100"              → inedible
- "Говно 50"                   → inedible
- "Сука пиздец"                → abuse
- "Иди нахуй"                  → abuse
- "asdf"                       → nonsense
+  "Курица 200"          → food
+  "Бургер охуенный 300" → food   (profanity modifies real food)
+  "Привет"              → greeting
+  "Кал слона 100"       → inedible
+  "Сука пиздец"         → abuse
+  "asdf"                → nonsense
 
-When the category is anything other than "food", set is_food_intent=FALSE.
-Return only the structured result.
+When category != "food", is_food_intent=FALSE. Return only the structured result.
 """
 
 

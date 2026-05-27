@@ -22,7 +22,7 @@ Telegram-бот + Mini App для дневника питания с AI-ввод
 | Frontend | React + Vite + TypeScript + Tailwind + shadcn/ui |
 | Mini App | @telegram-apps/sdk-react + @telegram-apps/telegram-ui |
 | Deploy | Railway (backend + db + qdrant), Vercel (frontend) |
-| Package mgr | uv (Python), npm (frontend) |
+| Package mgr | uv (Python), yarn (frontend) |
 
 ## Структура репозитория
 
@@ -116,11 +116,11 @@ uv run alembic revision --autogenerate -m "msg"  # новая миграция
 ### Frontend
 ```bash
 cd frontend
-npm install
-npm run dev                            # vite dev server
-npm run typecheck
-npm run lint
-npm run build
+yarn install
+yarn dev                               # vite dev server
+yarn typecheck
+yarn lint
+yarn build
 ```
 
 ### Evals

@@ -179,7 +179,7 @@ sequenceDiagram
 | `ngrok` *(dev)* | HTTPS-туннель к Vite dev server (для тестов Mini App в Telegram) | 4040 |
 
 Mini App **frontend** в Compose не входит — поднимается отдельно через Vite
-(`cd frontend && npm run dev`, порт 5173, прокси `/api` → `:8000`).
+(`cd frontend && yarn dev`, порт 5173, прокси `/api` → `:8000`).
 См. [docs/MINI_APP.md](docs/MINI_APP.md).
 
 В проде `bot` запускается как webhook внутри `api` (один сервис вместо двух),
@@ -313,8 +313,8 @@ uv run alembic upgrade head
 
 ```bash
 cd frontend
-npm install        # установить зависимости (один раз)
-npm run dev        # dev-сервер → http://localhost:5173
+yarn install       # установить зависимости (один раз)
+yarn dev           # dev-сервер → http://localhost:5173
 ```
 
 Открой **http://localhost:5173** в браузере. Вне Telegram `X-Init-Data`
@@ -324,10 +324,10 @@ npm run dev        # dev-сервер → http://localhost:5173
 
 Прочие команды:
 ```bash
-npm run typecheck  # tsc --noEmit
-npm run lint       # eslint
-npm run build      # tsc + vite build → dist/
-npm run preview    # предпросмотр прод-сборки
+yarn typecheck     # tsc --noEmit
+yarn lint          # eslint
+yarn build         # tsc + vite build → dist/
+yarn preview       # предпросмотр прод-сборки
 ```
 
 > Dev-сервер должен работать постоянно, пока тестируешь Mini App.

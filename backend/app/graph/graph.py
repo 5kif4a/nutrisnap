@@ -5,32 +5,35 @@ Graph (Variant B — thin LangGraph, see docs/ARCHITECTURE_VARIANTS.md):
     START
       │
       ▼
-    route (pure-Python conditional edge)
-      ├──[photo]── analyze_photo ───────────────────────────┐
-      ├──[voice]── transcribe_voice ── moderate_input ──┐   │
-      ├──[text]──────────────────────  moderate_input ──┤   │
-      │                                                 │   │
-      │                                  [is_food=False]│   │
-      │                                                 ▼   │
-      │                                            finalize │
-      │                                                 ▲   │
-      │                                  [is_food=True] │   │
-      │                                  parse_text ────┤   │
-      │                                                 │   │
-      │                                                 ▼   │
-      │                                        nutrition_fetch
-      │                                                 │
-      └──[unknown]── reject ─────────────────────────── │ ── END
-                                                        ▼
-                                                    finalize ── END
+    route_input ── pure code; picks the branch by input type
+      ├──[photo]── analyze_photo (vision + built-in guiderail in one call)
+      │              ├── unsafe / non-food → error
+      │              └── ok                 → nutrition_lookup
+      ├──[voice]── transcribe_voice ──┐
+      │                               ▼
+      │                          guiderail
+      │                               ├── blocked → error
+      │                               └── ok      → parse_text
+      │                                              ├── empty / parse fail → error
+      │                                              └── items               → nutrition_lookup
+      ├──[text]── guiderail (same as voice path)
+      └──[unknown]── reject ── END
 
-`moderate_input` is an LLM-powered safety gate (OpenAI Moderation API +
-gpt-4o-mini food-intent classifier) that blocks inedible / abusive content
-before the parser ever sees it.
+    nutrition_lookup ──┐
+                       ├── nothing resolved → error
+                       └── ok               → reflect
+                                                ├── ok     → finalize ── END
+                                                ├── retry  → nutrition_lookup (strict=True)
+                                                └── giveup → error ── END
 
-Conditional edges after `moderate_input` and `parse_text` short-circuit to
-`finalize` when `is_food_related == False`, demonstrating real branching
-as required by the course rubric.
+`guiderail` runs the OpenAI Moderation API and the food-intent classifier
+in parallel. For photos, the same role is played by the vision call, which
+returns `is_food_image`/`is_safe_image` in its structured schema.
+
+`reflect` checks resolved items for hallucinations (Atwater + fuzzy
+name-match + vision scene cross-check). On the first failure it loops back
+to `nutrition_lookup` with `reflect_strict=True` (skip OFF/FatSecret text
+search). On the second failure it routes to `error`.
 """
 
 from __future__ import annotations
@@ -39,30 +42,68 @@ from functools import lru_cache
 
 from langgraph.graph import END, START, StateGraph
 
+from app.graph.nodes.error import error_node
 from app.graph.nodes.finalize import finalize_node, reject_node
-from app.graph.nodes.moderation import moderate_input_node
+from app.graph.nodes.guiderail import guiderail_node
 from app.graph.nodes.nutrition import nutrition_fetch_node
 from app.graph.nodes.parser import parse_text_node
+from app.graph.nodes.reflect import reflect_node
 from app.graph.nodes.route import route_input
 from app.graph.nodes.transcribe import transcribe_voice_node
 from app.graph.nodes.vision import analyze_photo_node
 from app.graph.state import GraphState
 
 
-def _route_after_moderation(state: GraphState) -> str:
-    """Blocked content → finalize (standard non-food reply); else → parser."""
-    if state.get("is_food_related") is False:
-        return "finalize"
+def _route_after_vision(state: GraphState) -> str:
+    if state.get("error"):
+        return "error"
+    if state.get("is_input_safe") is False:
+        return "error"
+    if not state.get("parsed_items"):
+        # Vision returned no items even though the image was OK — tag and bail.
+        state["error"] = "nothing parsed"
+        return "error"
+    return "nutrition_lookup"
+
+
+def _route_after_transcribe(state: GraphState) -> str:
+    if state.get("error"):
+        return "error"
+    if not (state.get("transcribed_text") or "").strip():
+        state["error"] = "stt failed: empty"
+        return "error"
+    return "guiderail"
+
+
+def _route_after_guiderail(state: GraphState) -> str:
+    if state.get("is_input_safe") is False:
+        return "error"
     return "parse_text"
 
 
 def _route_after_parse(state: GraphState) -> str:
-    """Skip lookup if the message was not food-related."""
-    if state.get("is_food_related") is False:
-        return "finalize"
+    if state.get("error"):
+        return "error"
     if not state.get("parsed_items"):
-        return "finalize"
-    return "nutrition_fetch"
+        state["error"] = "nothing parsed"
+        return "error"
+    return "nutrition_lookup"
+
+
+def _route_after_lookup(state: GraphState) -> str:
+    if not state.get("resolved_items"):
+        state["error"] = "nothing resolved"
+        return "error"
+    return "reflect"
+
+
+def _route_after_reflect(state: GraphState) -> str:
+    decision = state.get("reflect_decision")
+    if decision == "retry":
+        return "nutrition_lookup"
+    if decision == "giveup":
+        return "error"
+    return "finalize"
 
 
 def build_meal_graph():
@@ -70,55 +111,89 @@ def build_meal_graph():
 
     graph.add_node("analyze_photo", analyze_photo_node)
     graph.add_node("transcribe_voice", transcribe_voice_node)
-    graph.add_node("moderate_input", moderate_input_node)
+    graph.add_node("guiderail", guiderail_node)
     graph.add_node("parse_text", parse_text_node)
-    graph.add_node("nutrition_fetch", nutrition_fetch_node)
+    graph.add_node("nutrition_lookup", nutrition_fetch_node)
+    graph.add_node("reflect", reflect_node)
     graph.add_node("finalize", finalize_node)
+    graph.add_node("error", error_node)
     graph.add_node("reject", reject_node)
 
-    # Entrypoint — route based on input type (pure code, no LLM).
-    # Text and voice flow through the moderation gate before parsing; photo
-    # input goes straight to the vision parser (vision prompt has its own
-    # inedible-content rule).
+    # Entrypoint — pure-code router by input type.
     graph.add_conditional_edges(
         START,
         route_input,
         {
             "analyze_photo": "analyze_photo",
             "transcribe_voice": "transcribe_voice",
-            "parse_text": "moderate_input",
+            "parse_text": "guiderail",  # text path now starts with guiderail
             "reject": "reject",
         },
     )
 
-    # Voice → moderate (Whisper transcript) → parser.
-    graph.add_edge("transcribe_voice", "moderate_input")
-
-    # Vision goes straight to lookup — items are already structured.
-    graph.add_edge("analyze_photo", "nutrition_fetch")
-
-    # Moderation branches: clean text → parser, blocked → finalize.
+    # Photo path — vision call gates by is_food_image / is_safe_image.
     graph.add_conditional_edges(
-        "moderate_input",
-        _route_after_moderation,
+        "analyze_photo",
+        _route_after_vision,
         {
-            "parse_text": "parse_text",
-            "finalize": "finalize",
+            "nutrition_lookup": "nutrition_lookup",
+            "error": "error",
         },
     )
 
-    # Parser branches: food-related → lookup, else → straight to finalize.
+    # Voice path: transcribe → guiderail → parse.
+    graph.add_conditional_edges(
+        "transcribe_voice",
+        _route_after_transcribe,
+        {
+            "guiderail": "guiderail",
+            "error": "error",
+        },
+    )
+
+    # Guiderail (shared by text + voice).
+    graph.add_conditional_edges(
+        "guiderail",
+        _route_after_guiderail,
+        {
+            "parse_text": "parse_text",
+            "error": "error",
+        },
+    )
+
+    # Parser → lookup or error.
     graph.add_conditional_edges(
         "parse_text",
         _route_after_parse,
         {
-            "nutrition_fetch": "nutrition_fetch",
-            "finalize": "finalize",
+            "nutrition_lookup": "nutrition_lookup",
+            "error": "error",
         },
     )
 
-    graph.add_edge("nutrition_fetch", "finalize")
+    # Lookup → reflect or error.
+    graph.add_conditional_edges(
+        "nutrition_lookup",
+        _route_after_lookup,
+        {
+            "reflect": "reflect",
+            "error": "error",
+        },
+    )
+
+    # Reflect can loop back to lookup once (with strict=True) or terminate.
+    graph.add_conditional_edges(
+        "reflect",
+        _route_after_reflect,
+        {
+            "nutrition_lookup": "nutrition_lookup",
+            "finalize": "finalize",
+            "error": "error",
+        },
+    )
+
     graph.add_edge("finalize", END)
+    graph.add_edge("error", END)
     graph.add_edge("reject", END)
 
     return graph.compile()

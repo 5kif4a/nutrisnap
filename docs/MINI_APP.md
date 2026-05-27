@@ -43,8 +43,8 @@ docker compose up -d --build bot
 
 # 2. Фронтенд — порт 5173
 cd frontend
-npm install
-npm run dev
+yarn install
+yarn dev
 ```
 
 Открой **http://localhost:5173** в браузере. Vite проксирует `/api` →

@@ -1,59 +1,24 @@
-"""finalize_node — builds a human-readable summary for the bot to send."""
+"""finalize_node — render the success summary the bot sends to the user.
+
+Error paths never reach this node — they are routed to `error_node` instead.
+"""
 
 from __future__ import annotations
+
+from langsmith import traceable
 
 from app.graph.state import GraphState
 
 
-# Map internal error tags (set by parser/vision/transcribe nodes) to
-# user-facing messages. Keep the technical identifier in `state["error"]`
-# so logs/LangSmith stay debuggable, but never surface it to the user.
-def _user_facing_error(err: str) -> str:
-    if err.startswith("vision failed"):
-        return (
-            "🙃 Не получилось распознать фото.\n"
-            "Сними поближе и в лучшем свете — или опиши текстом."
-        )
-    if err.startswith("stt failed"):
-        return (
-            "🙃 Не разобрал голосовое.\n"
-            "Попробуй ещё раз или опиши текстом."
-        )
-    if err.startswith("parse failed"):
-        return (
-            "🙃 Не получилось обработать сообщение.\n"
-            "Попробуй ещё раз через минуту или пришли фото / голосовое."
-        )
-    if err == "empty text input":
-        return "Пришли мне еду — фото, голосовое или текст."
-    if err.startswith("nutrition failed"):
-        return (
-            "🙃 Не смог посчитать КБЖУ.\n"
-            "Попробуй ещё раз — иногда внешние сервисы тормозят."
-        )
-    # Fallback — covers any future error tags we forgot to map.
-    return (
-        "🙃 Что-то пошло не так.\n"
-        "Попробуй ещё раз через минуту."
-    )
-
-
+@traceable(run_type="chain", name="node_finalize")
 async def finalize_node(state: GraphState) -> GraphState:
-    if state.get("error"):
-        state["response_text"] = _user_facing_error(state["error"])
-        return state
-
     resolved = state.get("resolved_items") or []
     if not resolved:
-        if state.get("is_food_related") is False:
-            state["response_text"] = (
-                "🥦 Я помогаю только с дневником питания. "
-                "Пришли фото еды, голосовое или описание текстом."
-            )
-        else:
-            state["response_text"] = (
-                "Не смог распознать продукты. Попробуй ещё раз — фото, голос или текст."
-            )
+        # Belt-and-braces: graph should have routed to error_node, but if we
+        # got here with nothing to show, render a generic fallback.
+        state["response_text"] = (
+            "Не смог распознать продукты. Попробуй ещё раз — фото, голос или текст."
+        )
         return state
 
     lines = ["📋 Распознал:"]
@@ -76,6 +41,14 @@ async def finalize_node(state: GraphState) -> GraphState:
     lines.append(
         f"Итого: {total_kcal:.0f} ккал | Б {total_p:.0f} / Ж {total_f:.0f} / У {total_c:.0f}"
     )
+
+    warnings = state.get("reflect_warnings") or []
+    if warnings:
+        # Show only the count + first warning so the user knows to double-check
+        # without us flooding the chat with debugging detail.
+        lines.append("")
+        lines.append(f"⚠️ Низкая уверенность: {warnings[0]}")
+
     lines.append("")
     lines.append("Куда записать?")
 
@@ -83,6 +56,7 @@ async def finalize_node(state: GraphState) -> GraphState:
     return state
 
 
+@traceable(run_type="chain", name="node_reject")
 async def reject_node(state: GraphState) -> GraphState:
     state["response_text"] = (
         "🥦 Я помогаю только с дневником питания.\n"
