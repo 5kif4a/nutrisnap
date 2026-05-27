@@ -20,8 +20,12 @@ COPY pyproject.toml uv.lock ./
 
 # --no-install-project: install only deps, not the app itself.
 # --no-dev: skip dev tools (ruff, pytest) for a leaner runtime image.
-RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev
+# Note: we used to mount a BuildKit cache here (`--mount=type=cache,...`),
+# which sped up local rebuilds, but Railway's builder rejects cache mounts
+# without their `s/<service-id>-` id prefix. Dropping the mount keeps the
+# Dockerfile portable across builders. Local cold builds add ~20s; Railway
+# already caches the layer above when uv.lock / pyproject.toml are unchanged.
+RUN uv sync --frozen --no-install-project --no-dev
 
 # ─── Stage 2: runtime ──────────────────────────────────────────────
 FROM python:3.12.7-slim AS runtime
