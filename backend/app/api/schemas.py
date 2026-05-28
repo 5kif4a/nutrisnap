@@ -206,12 +206,7 @@ class RecommendRequest(BaseModel):
 
 
 class QuickAddRequest(BaseModel):
-    """Body for POST /api/meals/quick-add — log one item as a standalone meal.
-
-    For multi-item quick-add the client should call this once per item OR
-    use the future /api/meals/bulk endpoint. Keeping it single for now to
-    match the 'tap to log' UX of stock diary apps.
-    """
+    """Body for POST /api/meals/quick-add — log one item as a standalone meal."""
 
     food_name: str
     amount: float = Field(gt=0)
@@ -227,3 +222,84 @@ class QuickAddRequest(BaseModel):
         default=None,
         description="Defaults to now. Pass to backfill historical entries.",
     )
+
+
+class BulkAddItem(BaseModel):
+    """One entry in a multi-item quick-add — same per-item fields as QuickAddRequest."""
+
+    food_name: str
+    amount: float = Field(gt=0)
+    unit: FoodMetric
+    weight_g: float = Field(ge=0)
+    kcal: float = Field(ge=0)
+    protein_g: float = Field(ge=0)
+    fat_g: float = Field(ge=0)
+    carbs_g: float = Field(ge=0)
+    food_id: UUID | None = None
+
+
+class BulkAddRequest(BaseModel):
+    """Body for POST /api/meals/bulk — log multiple items as a single Meal.
+
+    Used by the My-Foods FatSecret-style flow: user picks N items + a single
+    meal_type, server creates one Meal with N items in one transaction.
+    """
+
+    meal_type: MealType
+    items: list[BulkAddItem] = Field(min_length=1)
+    eaten_at: datetime | None = Field(
+        default=None,
+        description="Defaults to now. Pass to backfill historical entries.",
+    )
+
+
+class CreateCustomFoodRequest(BaseModel):
+    """Body for POST /api/foods/custom — user-created catalog entry.
+
+    Macros are stored per 100g / 100ml / 1 piece / 1 serving depending on
+    `metric` — matching how `Food` already stores them.
+    """
+
+    name: str = Field(min_length=1, max_length=255)
+    brand: str | None = Field(default=None, max_length=128)
+    metric: FoodMetric
+    kcal: float = Field(ge=0)
+    protein_g: float = Field(ge=0)
+    fat_g: float = Field(ge=0)
+    carbs_g: float = Field(ge=0)
+    piece_weight_g: float | None = Field(
+        default=None,
+        ge=0,
+        description="Required for PIECE/SERVING — typical weight of one unit, in grams.",
+    )
+
+
+class ResolvedItemOut(BaseModel):
+    """One parsed-and-resolved food item — same fields as a MealItem row.
+
+    Shape mirrors MealItemPayload so the client can carry it straight into
+    the bulk-save flow without an extra mapping.
+    """
+
+    food_name: str
+    amount: float
+    unit: FoodMetric
+    weight_g: float
+    kcal: float
+    protein_g: float
+    fat_g: float
+    carbs_g: float
+    food_id: UUID | None = None
+
+
+class MealEntryResolveResponse(BaseModel):
+    """Response from the Mini-App photo/text resolve endpoints — items the
+    client should confirm + then save via the bulk endpoint."""
+
+    items: list[ResolvedItemOut]
+    response_text: str | None = None  # human-friendly summary from the graph
+    reason: str | None = None  # filled when items is empty (guiderail / no match)
+
+
+class TextEntryRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)

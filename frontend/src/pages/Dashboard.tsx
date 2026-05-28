@@ -1,12 +1,22 @@
 import { Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CircularProgress } from "../components/CircularProgress";
+import { FabActionSheet } from "../components/FabActionSheet";
+import { FoodForm } from "../components/FoodForm";
 import { MacroBar } from "../components/MacroBar";
 import { MealCard } from "../components/MealCard";
+import { MealTypeSheet } from "../components/MealTypeSheet";
 import { api } from "../lib/api";
 import { humanDate, monthOf, todayISO, weekGrid } from "../lib/date";
-import { closeToBot } from "../telegram";
-import type { DayResponse, DayStatus, MonthDay } from "../types";
+import type {
+  BulkAddItem,
+  DayResponse,
+  DayStatus,
+  MealType,
+  MonthDay,
+  QuickAddFoodOut,
+  ResolvedItem,
+} from "../types";
 
 interface Props {
   date: string;
@@ -37,6 +47,16 @@ export function Dashboard({ date, onDateChange }: Props) {
   const [weekStatus, setWeekStatus] = useState<Map<string, MonthDay>>(
     () => new Map(),
   );
+
+  // FAB action-sheet state. `pendingItems` is the basket the user is about
+  // to save (either from a vision-resolved photo OR a single manually-created
+  // food). When non-empty + mealPickerOpen → MealTypeSheet shows.
+  const [actionSheetOpen, setActionSheetOpen] = useState(false);
+  const [foodFormOpen, setFoodFormOpen] = useState(false);
+  const [pendingItems, setPendingItems] = useState<BulkAddItem[]>([]);
+  const [mealPickerOpen, setMealPickerOpen] = useState(false);
+  const [savingMeal, setSavingMeal] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
 
   const load = useCallback(async (d: string) => {
     setLoading(true);
@@ -93,6 +113,66 @@ export function Dashboard({ date, onDateChange }: Props) {
 
   const today = todayISO();
 
+  // Photo-resolved items from FabActionSheet → open meal-type picker.
+  const handlePhotoResolved = useCallback((items: ResolvedItem[]) => {
+    setPendingItems(
+      items.map((it) => ({
+        food_name: it.food_name,
+        amount: it.amount,
+        unit: it.unit,
+        weight_g: it.weight_g,
+        kcal: it.kcal,
+        protein_g: it.protein_g,
+        fat_g: it.fat_g,
+        carbs_g: it.carbs_g,
+        food_id: it.food_id ?? null,
+      })),
+    );
+    setActionSheetOpen(false);
+    setMealPickerOpen(true);
+  }, []);
+
+  // Newly-created custom food from FAB → seed pending basket with 1 item
+  // and jump to meal-type picker (no extra weight-edit step — the user just
+  // entered the per-portion macros).
+  const handleProductCreated = useCallback((food: QuickAddFoodOut) => {
+    setPendingItems([
+      {
+        food_name: food.food_name,
+        amount: food.amount,
+        unit: food.unit,
+        weight_g: food.weight_g,
+        kcal: food.kcal,
+        protein_g: food.protein_g,
+        fat_g: food.fat_g,
+        carbs_g: food.carbs_g,
+        food_id: food.food_id,
+      },
+    ]);
+    setFoodFormOpen(false);
+    setMealPickerOpen(true);
+  }, []);
+
+  const handleSaveMeal = useCallback(
+    async (mealType: MealType) => {
+      if (savingMeal || pendingItems.length === 0) return;
+      setSavingMeal(true);
+      try {
+        await api.bulkAddMeal({ meal_type: mealType, items: pendingItems });
+        setToast(`✅ ${pendingItems.length} позиц. записаны`);
+        setPendingItems([]);
+        setMealPickerOpen(false);
+        await load(date);
+      } catch (e) {
+        setToast(`⚠️ ${(e as Error).message}`);
+      } finally {
+        setSavingMeal(false);
+        setTimeout(() => setToast(null), 2400);
+      }
+    },
+    [savingMeal, pendingItems, load, date],
+  );
+
   return (
     <div className="mx-auto max-w-md px-4 pb-32 pt-16">
       {/* Selected day label. */}
@@ -146,11 +226,6 @@ export function Dashboard({ date, onDateChange }: Props) {
               max={data.targets.kcal ?? 0}
               label="ккал"
             />
-            {!data.targets.kcal && (
-              <p className="mt-3 text-center text-xs text-tg-hint">
-                Норма не задана — заполни профиль на вкладке «Профиль».
-              </p>
-            )}
           </div>
 
           <div className="mb-4 flex gap-3 rounded-2xl bg-tg-card p-4 shadow-sm">
@@ -200,7 +275,7 @@ export function Dashboard({ date, onDateChange }: Props) {
       >
         <div className="mx-auto flex max-w-md justify-end px-4">
           <button
-            onClick={closeToBot}
+            onClick={() => setActionSheetOpen(true)}
             aria-label="Добавить приём пищи"
             className="liquid-glass pointer-events-auto flex h-14 w-14 items-center justify-center rounded-full text-white active:scale-95"
             style={{
@@ -212,6 +287,50 @@ export function Dashboard({ date, onDateChange }: Props) {
           </button>
         </div>
       </div>
+
+      <FabActionSheet
+        open={actionSheetOpen}
+        onClose={() => setActionSheetOpen(false)}
+        onPickManual={() => {
+          setActionSheetOpen(false);
+          setFoodFormOpen(true);
+        }}
+        onPhotoResolved={handlePhotoResolved}
+        onError={(msg) => {
+          setToast(msg);
+          setTimeout(() => setToast(null), 3000);
+        }}
+      />
+
+      <FoodForm
+        open={foodFormOpen}
+        onClose={() => setFoodFormOpen(false)}
+        title="Ручное заполнение"
+        onCreated={handleProductCreated}
+      />
+
+      <MealTypeSheet
+        open={mealPickerOpen}
+        onPick={handleSaveMeal}
+        onClose={() => setMealPickerOpen(false)}
+        saving={savingMeal}
+        count={pendingItems.length}
+        kcal={pendingItems.reduce((s, it) => s + it.kcal, 0)}
+      />
+
+      {toast && (
+        <div
+          className="fixed left-1/2 -translate-x-1/2 transform rounded-full px-4 py-2 text-sm shadow-lg"
+          style={{
+            background: "var(--accent)",
+            color: "white",
+            bottom: "calc(env(safe-area-inset-bottom, 0px) + 160px)",
+            zIndex: 60,
+          }}
+        >
+          {toast}
+        </div>
+      )}
     </div>
   );
 }

@@ -128,3 +128,50 @@ export interface QuickAddRequest {
   food_id?: string | null;
   eaten_at?: string | null;
 }
+
+export interface BulkAddItem {
+  food_name: string;
+  amount: number;
+  unit: FoodMetric;
+  weight_g: number;
+  kcal: number;
+  protein_g: number;
+  fat_g: number;
+  carbs_g: number;
+  food_id?: string | null;
+}
+
+export interface BulkAddRequest {
+  meal_type: MealType;
+  items: BulkAddItem[];
+  eaten_at?: string | null;
+}
+
+export interface CreateCustomFoodRequest {
+  name: string;
+  brand?: string | null;
+  metric: FoodMetric;
+  kcal: number;
+  protein_g: number;
+  fat_g: number;
+  carbs_g: number;
+  piece_weight_g?: number | null;
+}
+
+export interface ResolvedItem {
+  food_name: string;
+  amount: number;
+  unit: FoodMetric;
+  weight_g: number;
+  kcal: number;
+  protein_g: number;
+  fat_g: number;
+  carbs_g: number;
+  food_id?: string | null;
+}
+
+export interface MealEntryResolveResponse {
+  items: ResolvedItem[];
+  response_text?: string | null;
+  reason?: string | null;
+}

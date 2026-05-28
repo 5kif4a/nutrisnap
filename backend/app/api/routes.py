@@ -10,15 +10,29 @@ from datetime import date
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Path,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
+from langsmith import traceable
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.api.schemas import (
+    BulkAddRequest,
+    CreateCustomFoodRequest,
     DayResponse,
     DayStatus,
     DayTotals,
     MacroTargets,
+    MealEntryResolveResponse,
     MealItemOut,
     MealOut,
     MonthDay,
@@ -29,15 +43,20 @@ from app.api.schemas import (
     RecommendationItemOut,
     RecommendationResponse,
     RecommendRequest,
+    ResolvedItemOut,
+    TextEntryRequest,
     UserProfile,
 )
+from app.graph.graph import get_meal_graph
 from app.graph.recommender import get_recommender_graph
-from app.db.models import Food, FoodMetric, InputSource, Meal, MealType, User
+from app.db.models import Food, FoodMetric, FoodSource, InputSource, Meal, MealType, User
 from app.db.session import get_session
 from app.repositories.food_repo import (
+    ExternalFoodPayload,
     list_frequent_foods_per_meal_type,
     list_recent_foods_per_meal_type,
     search_foods_by_name,
+    upsert_food_from_external,
 )
 from app.repositories.meal_repo import (
     MealItemPayload,
@@ -320,6 +339,181 @@ async def quick_add_meal(
         carbs_g=sum(it.carbs_g for it in meal.items),
         items=[MealItemOut.model_validate(it) for it in meal.items],
     )
+
+
+@router.post(
+    "/meals/bulk",
+    response_model=MealOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def bulk_add_meal(
+    payload: BulkAddRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> MealOut:
+    """Log multiple items as a single Meal (FatSecret-style basket save)."""
+    items = [
+        MealItemPayload(
+            food_name=it.food_name,
+            amount=it.amount,
+            unit=it.unit,
+            weight_g=it.weight_g,
+            kcal=it.kcal,
+            protein_g=it.protein_g,
+            fat_g=it.fat_g,
+            carbs_g=it.carbs_g,
+            food_id=it.food_id,
+        )
+        for it in payload.items
+    ]
+    meal = await log_meal_with_items(
+        session,
+        user=user,
+        meal_type=payload.meal_type,
+        items=items,
+        eaten_at=payload.eaten_at,
+        source=InputSource.QUICK_ADD,
+    )
+    return MealOut(
+        id=meal.id,
+        meal_type=meal.meal_type,
+        eaten_at=meal.eaten_at,
+        kcal=sum(it.kcal for it in meal.items),
+        protein_g=sum(it.protein_g for it in meal.items),
+        fat_g=sum(it.fat_g for it in meal.items),
+        carbs_g=sum(it.carbs_g for it in meal.items),
+        items=[MealItemOut.model_validate(it) for it in meal.items],
+    )
+
+
+@router.post(
+    "/foods/custom",
+    response_model=QuickAddFoodOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_custom_food(
+    payload: CreateCustomFoodRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> QuickAddFoodOut:
+    """Create a user-owned Food entry (source=CUSTOM) and return it as a
+    QuickAddFoodOut so the client can immediately add it to the basket."""
+    food = await upsert_food_from_external(
+        session,
+        ExternalFoodPayload(
+            name=payload.name.strip(),
+            brand=payload.brand.strip() if payload.brand else None,
+            metric=payload.metric,
+            kcal=payload.kcal,
+            protein_g=payload.protein_g,
+            fat_g=payload.fat_g,
+            carbs_g=payload.carbs_g,
+            piece_weight_g=payload.piece_weight_g,
+            source=FoodSource.CUSTOM,
+        ),
+        created_by_user_id=user.id,
+    )
+    return _food_to_quick_add(food)
+
+
+# ─── Mini-App entry endpoints (photo / text → vision/text graph) ────────────
+
+# Single traceable wrapper so LangSmith groups every node + LLM call from the
+# Mini-App entry under one parent span (cost rolls up here). The bot uses an
+# analogous `_invoke_meal_graph` wrapper in app/bot/handlers/meal.py.
+@traceable(run_type="chain", name="meal_graph_miniapp")
+async def _invoke_meal_graph_miniapp(state: dict) -> dict:
+    graph = get_meal_graph()
+    return await graph.ainvoke(state)
+
+
+def _state_to_resolve_response(state: dict) -> MealEntryResolveResponse:
+    """Project graph state → API response. Items come from `resolved_items`."""
+    resolved = state.get("resolved_items") or []
+    items: list[ResolvedItemOut] = []
+    for r in resolved:
+        p = r.get("payload")
+        if p is None:
+            continue
+        items.append(
+            ResolvedItemOut(
+                food_name=p.food_name,
+                amount=p.amount,
+                unit=p.unit,
+                weight_g=p.weight_g,
+                kcal=p.kcal,
+                protein_g=p.protein_g,
+                fat_g=p.fat_g,
+                carbs_g=p.carbs_g,
+                food_id=p.food_id,
+            )
+        )
+    reason: str | None = None
+    if not items:
+        reason = state.get("guiderail_block_reason") or state.get("error")
+    return MealEntryResolveResponse(
+        items=items,
+        response_text=state.get("response_text"),
+        reason=reason,
+    )
+
+
+# Telegram media uploads cap at ~20MB, but vision-model rate-limits punish big
+# blobs and our typical food photo is <2MB. 8MB is a sensible upper bound.
+_PHOTO_MAX_BYTES = 8 * 1024 * 1024
+_PHOTO_MIME_ALLOWED = {"image/jpeg", "image/png", "image/webp", "image/heic"}
+
+
+@router.post("/meals/from-photo", response_model=MealEntryResolveResponse)
+async def meal_from_photo(
+    file: UploadFile = File(..., description="Single photo of the meal"),
+    user: User = Depends(get_current_user),
+) -> MealEntryResolveResponse:
+    """Run the vision graph on an uploaded photo. Returns resolved items for
+    client-side confirmation — does NOT persist. Client follows up with
+    POST /api/meals/bulk after the user picks a meal_type."""
+    if file.content_type and file.content_type not in _PHOTO_MIME_ALLOWED:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Unsupported image type: {file.content_type}",
+        )
+    photo_bytes = await file.read()
+    if len(photo_bytes) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Empty file",
+        )
+    if len(photo_bytes) > _PHOTO_MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Photo exceeds {_PHOTO_MAX_BYTES // (1024 * 1024)}MB limit",
+        )
+
+    state = {
+        "raw_input_type": "photo",
+        "photo_bytes_list": [photo_bytes],
+        "caption": "",
+        "telegram_user_id": user.telegram_id,
+        "user_id": str(user.id),
+    }
+    result = await _invoke_meal_graph_miniapp(state)
+    return _state_to_resolve_response(result)
+
+
+@router.post("/meals/from-text", response_model=MealEntryResolveResponse)
+async def meal_from_text(
+    payload: TextEntryRequest,
+    user: User = Depends(get_current_user),
+) -> MealEntryResolveResponse:
+    """Run the text-parser graph. Same shape as /meals/from-photo."""
+    state = {
+        "raw_input_type": "text",
+        "text_input": payload.text,
+        "telegram_user_id": user.telegram_id,
+        "user_id": str(user.id),
+    }
+    result = await _invoke_meal_graph_miniapp(state)
+    return _state_to_resolve_response(result)
 
 
 @router.post("/recommendations", response_model=RecommendationResponse)

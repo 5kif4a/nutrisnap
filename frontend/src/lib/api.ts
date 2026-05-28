@@ -1,6 +1,9 @@
 import { getInitData } from "../telegram";
 import type {
+  BulkAddRequest,
+  CreateCustomFoodRequest,
   DayResponse,
+  MealEntryResolveResponse,
   MealOut,
   MealType,
   MonthResponse,
@@ -78,6 +81,42 @@ export const api = {
     request<MealOut>(`/api/meals/quick-add`, {
       method: "POST",
       body: JSON.stringify(payload),
+    }),
+
+  bulkAddMeal: (payload: BulkAddRequest) =>
+    request<MealOut>(`/api/meals/bulk`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  createCustomFood: (payload: CreateCustomFoodRequest) =>
+    request<QuickAddFoodOut>(`/api/foods/custom`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  entryFromPhoto: async (file: File): Promise<MealEntryResolveResponse> => {
+    // Multipart upload — fetch must NOT set Content-Type; the browser fills
+    // it with the multipart boundary. The X-Init-Data auth header is still
+    // required.
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${BASE}/api/meals/from-photo`, {
+      method: "POST",
+      headers: { "X-Init-Data": getInitData() },
+      body: form,
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`API ${res.status}: ${body || res.statusText}`);
+    }
+    return (await res.json()) as MealEntryResolveResponse;
+  },
+
+  entryFromText: (text: string) =>
+    request<MealEntryResolveResponse>(`/api/meals/from-text`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
     }),
 };
 

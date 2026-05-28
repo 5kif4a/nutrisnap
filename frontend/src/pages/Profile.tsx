@@ -1,14 +1,19 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Check, ChevronDown, Info, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Check, Info } from "lucide-react";
+import { useEffect, useState } from "react";
 import {
   Controller,
   useForm,
   type Control,
   type FieldError,
-  type Path,
-  type UseFormRegister,
 } from "react-hook-form";
+import { BottomSheet } from "../components/BottomSheet";
+import {
+  NumberField,
+  SelectField,
+  Segmented,
+  Toggle,
+} from "../components/FormFields";
 import { api } from "../lib/api";
 import { useToast } from "../lib/toast";
 import { profileFormSchema, type ProfileFormValues } from "../schemas/profile";
@@ -351,136 +356,6 @@ export function Profile() {
   );
 }
 
-/* ───────── small styled primitives, themed with tg-* tokens ───────── */
-
-interface NumberFieldProps {
-  label: string;
-  name: Path<ProfileFormValues>;
-  register: UseFormRegister<ProfileFormValues>;
-  error?: FieldError;
-}
-
-function NumberField({ label, name, register, error }: NumberFieldProps) {
-  return (
-    <label className="block">
-      <span className="mb-1.5 block text-xs text-tg-hint">{label}</span>
-      <input
-        type="number"
-        inputMode="numeric"
-        step="any"
-        {...register(name, {
-          // RHF reads <input> value as string by default; coerce to number
-          // for the schema. Empty string → null so the resolver can apply
-          // its conditional "required" rules per cross-field validation.
-          setValueAs: (v) => (v === "" || v == null ? null : Number(v)),
-        })}
-        className="w-full rounded-xl border border-[var(--glass-stroke)] bg-black/20 px-3.5 py-2.5 text-base text-tg-text outline-none transition focus:border-[var(--accent)]"
-      />
-      {error && (
-        <span className="mt-1 block text-xs text-red-400">{error.message}</span>
-      )}
-    </label>
-  );
-}
-
-interface SelectFieldProps {
-  label: string;
-  name: Path<ProfileFormValues>;
-  register: UseFormRegister<ProfileFormValues>;
-  options: { v: string; label: string }[];
-  error?: FieldError;
-}
-
-function SelectField({
-  label,
-  name,
-  register,
-  options,
-  error,
-}: SelectFieldProps) {
-  return (
-    <label className="block">
-      <span className="mb-1.5 block text-xs text-tg-hint">{label}</span>
-      <div className="relative">
-        <select
-          {...register(name)}
-          className="w-full appearance-none rounded-xl border border-[var(--glass-stroke)] bg-black/20 px-3.5 py-2.5 pr-10 text-base text-tg-text outline-none transition focus:border-[var(--accent)]"
-        >
-          {options.map((o) => (
-            <option key={o.v} value={o.v}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        <ChevronDown
-          size={18}
-          aria-hidden="true"
-          className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-tg-hint"
-        />
-      </div>
-      {error && (
-        <span className="mt-1 block text-xs text-red-400">{error.message}</span>
-      )}
-    </label>
-  );
-}
-
-interface SegmentedProps<T extends string> {
-  options: { v: T; label: string }[];
-  value: T;
-  onChange: (v: T) => void;
-}
-
-function Segmented<T extends string>({
-  options,
-  value,
-  onChange,
-}: SegmentedProps<T>) {
-  return (
-    <div className="grid grid-flow-col auto-cols-fr gap-1 rounded-xl border border-[var(--glass-stroke)] bg-black/20 p-1">
-      {options.map((o) => {
-        const selected = value === o.v;
-        return (
-          <button
-            key={o.v}
-            type="button"
-            onClick={() => onChange(o.v)}
-            className="rounded-lg px-2 py-2 text-sm font-medium transition"
-            style={{
-              color: selected ? "#ffffff" : "var(--tg-hint)",
-              background: selected ? "var(--accent)" : "transparent",
-            }}
-          >
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function Toggle({ on }: { on: boolean }) {
-  return (
-    <span
-      role="presentation"
-      className="relative inline-block h-7 w-12 shrink-0 rounded-full transition"
-      style={{
-        // iOS-style neutral grey for the off state — readable on both light
-        // and dark Telegram themes (white-on-light was invisible before).
-        background: on ? "var(--accent)" : "rgba(120, 120, 128, 0.32)",
-      }}
-    >
-      <span
-        className="absolute top-0.5 h-6 w-6 rounded-full bg-white transition-all"
-        style={{
-          left: on ? "22px" : "2px",
-          boxShadow: "0 2px 4px rgba(0, 0, 0, 0.25)",
-        }}
-      />
-    </span>
-  );
-}
-
 // `control` is intentionally untyped at the boundary; consumers above already
 // type their own Controller renders. Re-export only what page-level needs.
 export type _ControlBoundary = Control<ProfileFormValues>;
@@ -488,187 +363,67 @@ export type _ControlBoundary = Control<ProfileFormValues>;
 /* ───────── Mifflin-St Jeor explainer — bottom sheet ───────── */
 
 function FormulaSheet({ onClose }: { onClose: () => void }) {
-  const sheetRef = useRef<HTMLDivElement | null>(null);
-  const drag = useRef<{
-    startY: number;
-    startT: number;
-    active: boolean;
-  } | null>(null);
-  const [closing, setClosing] = useState(false);
-  const offsetRef = useRef(0);
-
-  useEffect(() => {
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.body.style.overflow = prevOverflow;
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [onClose]);
-
-  const applyOffset = (y: number) => {
-    offsetRef.current = y;
-    if (sheetRef.current) {
-      sheetRef.current.style.transform = `translateY(${y}px)`;
-    }
-  };
-
-  const close = () => {
-    setClosing(true);
-    window.setTimeout(onClose, 200);
-  };
-
-  const onDragStart = (e: React.PointerEvent<HTMLDivElement>) => {
-    drag.current = {
-      startY: e.clientY,
-      startT: performance.now(),
-      active: true,
-    };
-    e.currentTarget.setPointerCapture(e.pointerId);
-    if (sheetRef.current) sheetRef.current.style.transition = "none";
-  };
-
-  const onDragMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!drag.current?.active) return;
-    const dy = e.clientY - drag.current.startY;
-    applyOffset(Math.max(0, dy));
-  };
-
-  const onDragEnd = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!drag.current?.active) return;
-    const dy = offsetRef.current;
-    const dt = performance.now() - drag.current.startT;
-    const velocity = dy / Math.max(dt, 1);
-    drag.current.active = false;
-    try {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    } catch {
-      /* pointer already gone */
-    }
-    if (dy > 120 || velocity > 0.6) {
-      close();
-      return;
-    }
-    if (sheetRef.current) {
-      sheetRef.current.style.transition =
-        "transform 220ms cubic-bezier(0.32, 0.72, 0.24, 1)";
-    }
-    applyOffset(0);
-  };
-
   return (
-    <div className="fixed inset-0 z-[60] flex items-end justify-center">
-      <button
-        type="button"
-        onClick={close}
-        aria-label="Закрыть"
-        className={`absolute inset-0 bg-black/60 backdrop-blur-sm ${
-          closing ? "animate-sheet-fade-out" : "animate-sheet-fade"
-        }`}
-      />
+    <BottomSheet open onClose={onClose} title="Как считается норма">
+      <div className="space-y-3 text-sm text-tg-text">
+        <p>
+          Дневная норма калорий (РСК) рассчитывается по формуле{" "}
+          <b>Mifflin-St Jeor</b> — самой точной для здоровых взрослых.
+        </p>
 
-      <div
-        ref={sheetRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Формула расчёта"
-        className={`liquid-glass relative flex max-h-[85vh] w-full max-w-md flex-col rounded-t-3xl pt-3 ${
-          closing ? "animate-sheet-slide-out" : "animate-sheet-slide"
-        }`}
-        style={{ marginTop: "max(env(safe-area-inset-top), 24px)" }}
-      >
-        <div
-          className="px-5"
-          style={{ touchAction: "none", cursor: "grab" }}
-          onPointerDown={onDragStart}
-          onPointerMove={onDragMove}
-          onPointerUp={onDragEnd}
-          onPointerCancel={onDragEnd}
-        >
-          <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-white/30" />
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-tg-text">
-              Как считается норма
-            </h2>
-            <button
-              onClick={close}
-              aria-label="Закрыть"
-              className="flex h-8 w-8 items-center justify-center rounded-full bg-white/5 text-tg-hint transition active:scale-90"
-              style={{ touchAction: "auto" }}
-            >
-              <X size={18} />
-            </button>
+        <div className="rounded-xl border border-[var(--glass-stroke)] bg-black/20 p-3 font-mono text-[13px] leading-relaxed text-tg-text">
+          <div>
+            <span className="text-tg-hint">М:</span> BMR = 10·вес + 6.25·рост −
+            5·возраст + 5
+          </div>
+          <div>
+            <span className="text-tg-hint">Ж:</span> BMR = 10·вес + 6.25·рост −
+            5·возраст − 161
+          </div>
+          <div className="mt-2">
+            <span className="text-tg-hint">TDEE</span> = BMR · коэф. активности
           </div>
         </div>
 
-        <div
-          className="space-y-3 overflow-y-auto px-5 pb-[calc(env(safe-area-inset-bottom)+24px)] text-sm text-tg-text"
-          style={{ WebkitOverflowScrolling: "touch" }}
-        >
-          <p>
-            Дневная норма калорий (РСК) рассчитывается по формуле{" "}
-            <b>Mifflin-St Jeor</b> — самой точной для здоровых взрослых.
-          </p>
-
-          <div className="rounded-xl border border-[var(--glass-stroke)] bg-black/20 p-3 font-mono text-[13px] leading-relaxed text-tg-text">
-            <div>
-              <span className="text-tg-hint">М:</span> BMR = 10·вес + 6.25·рост
-              − 5·возраст + 5
-            </div>
-            <div>
-              <span className="text-tg-hint">Ж:</span> BMR = 10·вес + 6.25·рост
-              − 5·возраст − 161
-            </div>
-            <div className="mt-2">
-              <span className="text-tg-hint">TDEE</span> = BMR · коэф.
-              активности
-            </div>
+        <div>
+          <div className="mb-1 text-xs uppercase tracking-wide text-tg-hint">
+            Коэффициенты активности
           </div>
+          <ul className="space-y-1 text-[13px]">
+            <li>Сидячий — ×1.2</li>
+            <li>Лёгкая активность — ×1.375</li>
+            <li>Умеренная — ×1.55</li>
+            <li>Высокая — ×1.725</li>
+            <li>Очень высокая — ×1.9</li>
+          </ul>
+        </div>
 
-          <div>
-            <div className="mb-1 text-xs uppercase tracking-wide text-tg-hint">
-              Коэффициенты активности
-            </div>
-            <ul className="space-y-1 text-[13px]">
-              <li>Сидячий — ×1.2</li>
-              <li>Лёгкая активность — ×1.375</li>
-              <li>Умеренная — ×1.55</li>
-              <li>Высокая — ×1.725</li>
-              <li>Очень высокая — ×1.9</li>
-            </ul>
+        <div>
+          <div className="mb-1 text-xs uppercase tracking-wide text-tg-hint">
+            Поправка под цель
           </div>
+          <ul className="space-y-1 text-[13px]">
+            <li>📉 Похудеть — TDEE − 15%</li>
+            <li>⚖️ Поддерживать — TDEE</li>
+            <li>📈 Набрать — TDEE + 15%</li>
+          </ul>
+        </div>
 
-          <div>
-            <div className="mb-1 text-xs uppercase tracking-wide text-tg-hint">
-              Поправка под цель
-            </div>
-            <ul className="space-y-1 text-[13px]">
-              <li>📉 Похудеть — TDEE − 15%</li>
-              <li>⚖️ Поддерживать — TDEE</li>
-              <li>📈 Набрать — TDEE + 15%</li>
-            </ul>
+        <div>
+          <div className="mb-1 text-xs uppercase tracking-wide text-tg-hint">
+            Распределение БЖУ
           </div>
-
-          <div>
-            <div className="mb-1 text-xs uppercase tracking-wide text-tg-hint">
-              Распределение БЖУ
-            </div>
-            <p className="text-[13px]">
-              Белки 30% · Жиры 25% · Углеводы 45% от РСК. Калорийность: 1 г
-              белка = 4 ккал, 1 г жиров = 9 ккал, 1 г углеводов = 4 ккал.
-            </p>
-          </div>
-
-          <p className="text-xs text-tg-hint">
-            Формула — ориентир. Если знаешь свою норму точнее (анализы, тренер)
-            — переключи «вручную» сверху и впиши свои числа.
+          <p className="text-[13px]">
+            Белки 30% · Жиры 25% · Углеводы 45% от РСК. Калорийность: 1 г белка
+            = 4 ккал, 1 г жиров = 9 ккал, 1 г углеводов = 4 ккал.
           </p>
         </div>
+
+        <p className="text-xs text-tg-hint">
+          Формула — ориентир. Если знаешь свою норму точнее (анализы, тренер) —
+          переключи «вручную» сверху и впиши свои числа.
+        </p>
       </div>
-    </div>
+    </BottomSheet>
   );
 }
