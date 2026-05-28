@@ -21,34 +21,60 @@ async def lifespan(fastapi_app: FastAPI):
     telegram_app = build_telegram_application()
     fastapi_app.state.telegram_app = telegram_app
 
-    # Spawn the custom Nutrition MCP server and load its tools for the graph.
+    # Spawn the custom Nutrition MCP server first — it has no external deps
+    # and is needed by every graph invocation. Wrap teardown in try/finally
+    # so a later startup failure still cleans MCP up (otherwise stdio_client
+    # generators leak and Python GC produces noisy "asynchronous generator
+    # already running" / "cancel scope in different task" traces on exit).
     await start_nutrition_mcp()
-
-    await telegram_app.initialize()
-    await telegram_app.start()
-
-    if settings.WEBHOOK_BASE_URL:
-        webhook_url = f"{settings.WEBHOOK_BASE_URL.rstrip('/')}/telegram/webhook"
-        await telegram_app.bot.set_webhook(
-            url=webhook_url,
-            secret_token=settings.WEBHOOK_SECRET,
-            drop_pending_updates=True,
-        )
-        logger.info("Telegram webhook registered at %s", webhook_url)
-    else:
-        logger.warning(
-            "WEBHOOK_BASE_URL not set — webhook NOT registered. "
-            "Set it to the public API URL in prod (e.g. https://...railway.app)."
-        )
+    telegram_started = False
 
     try:
+        # Telegram startup is FAIL-SOFT: a transient connectivity hiccup to
+        # api.telegram.org during cold-start used to bring down the whole
+        # API (and the Mini App by extension). Log the failure and keep
+        # serving — the next deploy or a manual webhook reset recovers it.
+        try:
+            await telegram_app.initialize()
+            await telegram_app.start()
+            telegram_started = True
+            if settings.WEBHOOK_BASE_URL:
+                webhook_url = (
+                    f"{settings.WEBHOOK_BASE_URL.rstrip('/')}/telegram/webhook"
+                )
+                await telegram_app.bot.set_webhook(
+                    url=webhook_url,
+                    secret_token=settings.WEBHOOK_SECRET,
+                    drop_pending_updates=True,
+                )
+                logger.info("Telegram webhook registered at %s", webhook_url)
+            else:
+                logger.warning(
+                    "WEBHOOK_BASE_URL not set — webhook NOT registered. "
+                    "Set it to the public API URL in prod (e.g. https://...railway.app)."
+                )
+        except Exception:
+            logger.exception(
+                "Telegram startup failed — API stays up, bot bindings disabled "
+                "until the next deploy or a manual webhook reset"
+            )
+
         yield
     finally:
-        if settings.WEBHOOK_BASE_URL:
-            await telegram_app.bot.delete_webhook()
-        await telegram_app.stop()
-        await telegram_app.shutdown()
-        await stop_nutrition_mcp()
+        # Telegram teardown is best-effort: we already logged any startup
+        # failure; shutdown errors should never mask the real cause.
+        if telegram_started:
+            try:
+                if settings.WEBHOOK_BASE_URL:
+                    await telegram_app.bot.delete_webhook()
+                await telegram_app.stop()
+                await telegram_app.shutdown()
+            except Exception:
+                logger.exception("Telegram shutdown error (non-fatal)")
+        try:
+            await stop_nutrition_mcp()
+        except Exception:
+            logger.exception("MCP shutdown error (non-fatal)")
 
 
 app = FastAPI(title="NutriSnap API", lifespan=lifespan)
