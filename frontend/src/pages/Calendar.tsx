@@ -1,6 +1,8 @@
+import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
-import { api } from "../lib/api";
+import { useState } from "react";
+import { monthQuery } from "../queries";
 import {
   monthGrid,
   monthLabel,
@@ -8,11 +10,7 @@ import {
   thisMonth,
   todayISO,
 } from "../lib/date";
-import type { DayStatus, MonthResponse } from "../types";
-
-interface Props {
-  onSelectDay: (iso: string) => void;
-}
+import type { DayStatus } from "../types";
 
 const WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
 
@@ -30,23 +28,14 @@ const LEGEND: { status: DayStatus; label: string }[] = [
   { status: "empty", label: "Нет записей" },
 ];
 
-export function Calendar({ onSelectDay }: Props) {
+export function Calendar() {
+  const navigate = useNavigate();
   const [month, setMonth] = useState(thisMonth());
-  const [data, setData] = useState<MonthResponse | null>(null);
 
-  const load = useCallback(async (m: string) => {
-    try {
-      setData(await api.getMonth(m));
-    } catch {
-      // Backend hiccup — render the grid with all days as "empty" instead
-      // of a red error wall.
-      setData({ month: m, target_kcal: null, days: [] });
-    }
-  }, []);
-
-  useEffect(() => {
-    load(month);
-  }, [month, load]);
+  const { data } = useQuery({
+    ...monthQuery(month),
+    placeholderData: { month, target_kcal: null, days: [] },
+  });
 
   const byDate = new Map((data?.days ?? []).map((d) => [d.date, d]));
   const isFuture = month >= thisMonth();
@@ -54,7 +43,7 @@ export function Calendar({ onSelectDay }: Props) {
 
   return (
     <div className="mx-auto max-w-md px-4 pb-32 pt-16">
-      {/* Header — back to dashboard on the left, month nav on the right. */}
+      {/* Month navigation header. */}
       <div className="mb-4 flex items-center gap-2">
         <button
           onClick={() => setMonth((m) => shiftMonth(m, -1))}
@@ -98,7 +87,9 @@ export function Calendar({ onSelectDay }: Props) {
               <button
                 key={iso}
                 disabled={future}
-                onClick={() => onSelectDay(iso)}
+                onClick={() =>
+                  void navigate({ to: "/dashboard", search: { date: iso } })
+                }
                 className={`relative aspect-square rounded-lg text-sm font-medium transition active:scale-95 disabled:opacity-30 ${
                   status === "empty" ? "text-tg-text" : "text-white"
                 } ${iso === today ? "ring-2 ring-tg-link" : ""}`}

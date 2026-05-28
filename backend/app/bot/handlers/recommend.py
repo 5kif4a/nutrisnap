@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from app.db.models import FoodMetric, InputSource
@@ -67,7 +68,7 @@ async def handle_recommend_command(
     token = await stash_recommendations(items)
     reply = _format_reply(summary, items)
     keyboard = _build_keyboard(token, items)
-    await thinking.edit_text(reply, reply_markup=keyboard)
+    await thinking.edit_text(reply, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
 
 
 def _format_reply(summary: str, items: list[RecommendedItem]) -> str:

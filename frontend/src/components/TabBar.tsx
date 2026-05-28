@@ -1,3 +1,4 @@
+import { Link, useRouterState } from "@tanstack/react-router";
 import {
   Apple,
   CalendarDays,
@@ -5,39 +6,28 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-export type Tab = "dashboard" | "calendar" | "foods" | "profile";
-
-interface Props {
-  active: Tab;
-  onChange: (tab: Tab) => void;
-}
-
-/** Three visible tabs — "profile" is reachable via the global person icon. */
-const TABS: { id: Tab; label: string; Icon: LucideIcon }[] = [
-  { id: "foods", label: "Продукты", Icon: Apple },
-  { id: "dashboard", label: "Дневник", Icon: LayoutDashboard },
-  { id: "calendar", label: "Календарь", Icon: CalendarDays },
+const TABS: { to: string; label: string; Icon: LucideIcon }[] = [
+  { to: "/foods", label: "Продукты", Icon: Apple },
+  { to: "/dashboard", label: "Дневник", Icon: LayoutDashboard },
+  { to: "/calendar", label: "Календарь", Icon: CalendarDays },
 ];
 
-export function TabBar({ active, onChange }: Props) {
-  // Profile view stays without a highlighted pill — it's a modal-like
-  // detour reached via the global gear icon, not part of the main flow.
-  const effective = active === "profile" ? null : active;
+export function TabBar() {
+  const { location } = useRouterState();
+  const pathname = location.pathname;
 
   return (
     <nav
-      // High z-index so the pill always floats above content, fab, and any
-      // Telegram-UI components that may layer themselves over the bottom.
       className="fixed inset-x-0 bottom-0 z-50 flex justify-center pb-[max(env(safe-area-inset-bottom),12px)]"
       aria-label="Основная навигация"
     >
       <div className="liquid-glass flex w-auto max-w-[88vw] items-center gap-1 rounded-full px-1.5 py-1.5">
-        {TABS.map(({ id, label, Icon }) => {
-          const selected = effective === id;
+        {TABS.map(({ to, label, Icon }) => {
+          const selected = pathname === to;
           return (
-            <button
-              key={id}
-              onClick={() => onChange(id)}
+            <Link
+              key={to}
+              to={to}
               aria-label={label}
               aria-current={selected ? "page" : undefined}
               className="flex flex-col items-center gap-0.5 rounded-full px-3 py-1 transition active:scale-95"
@@ -57,7 +47,7 @@ export function TabBar({ active, onChange }: Props) {
               >
                 {label}
               </span>
-            </button>
+            </Link>
           );
         })}
       </div>

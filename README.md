@@ -24,15 +24,34 @@
 - 📸 Фото блюда / весов / упаковки → GPT-4o Vision распознаёт продукты, читает граммовку с дисплея весов, штрих-код с упаковки
 - 🎙 Голосовое сообщение → Whisper транскрибация → парсинг
 - ✏️ Текст или пересланное сообщение → GPT-4o-mini структурирует (правила: голое число = граммы, бренды в кириллице/транслите, composite-блюдо = один item)
+- 🔍 **Disambiguation top-3**: при однозначном текстовом/голосовом вводе бот делает Qdrant top-3 поиск и показывает inline-кнопки для уточнения («Сникерс батончик / Сникерс мороженое / Сникерс мини») — только если оценки близки (разброс ≤ 0.20)
 - ⚡ **Quick Add** под подтверждением приёма: одной кнопкой докинуть в текущий черновик частый продукт юзера на этот тип приёма
 
-### Поиск продуктов (multi-source)
-1. Локальный кэш PostgreSQL с `ORDER BY source_priority` (`curated > user_recipe > fatsecret > llm_estimate`)
-2. Qdrant RAG (semantic search по name + brand + cuisine + aliases)
-3. FatSecret API (fallback для редких EN-only продуктов, требует static IP proxy)
-4. GPT-4o-mini estimate — **ephemeral**, не загрязняет каталог
+### Поиск продуктов
 
-Любой новый Food (из FatSecret / user-recipe) автоматически embed'ится в Qdrant fire-and-forget хуком — recommender видит каталог в реальном времени.
+**Основной пайплайн (MCP `resolve_meal_item`):**
+
+| # | Источник | Покрытие | Задержка |
+|---|---|---|---|
+| 1 | PostgreSQL local cache (barcode → name/alias) | ~80% после прогрева | 10 мс |
+| 2 | GPT-4o-mini estimate — ephemeral, не сохраняется | last resort | 1–2 с |
+
+**Qdrant** (`text-embedding-3-small`) используется отдельно:
+- Recommender subgraph — top-20 кандидатов для `/recommend`
+- Disambiguation — top-3 альтернативы перед подтверждением приёма
+- Auto-index hook: каждый новый `Food` (user_recipe, curated seed) embed'ится fire-and-forget
+
+### 🧮 Калькулятор блюд (`/calculate`)
+
+Новая фича для расчёта КБЖУ собственных рецептов без фото:
+
+1. `/calculate` → лайв-панель с пустым списком ингредиентов
+2. Отправляй текстом или пересылай список («курица 800\nкартошка 1739\nморковь 495»)
+3. Каждое сообщение парсится через граф, добавляется в панель с накопленным итогом
+4. Тап «✅ Готово» → расчёт: общий вес, КБЖУ всего блюда, **КБЖУ на 100 г**
+5. Дай название → опционально сохрани в базу как `Food` → в следующий раз «150 г жаркОе» за 10 мс из PG
+
+Пересланные сообщения с ингредиентами перехватываются ConversationHandler'ом и НЕ логируются как отдельный приём пищи.
 
 ### Дневник и аналитика
 - Дашборд с кольцевым прогресс-баром калорий и БЖУ
@@ -64,11 +83,13 @@
 | Команда | Что |
 |---|---|
 | `/start` | Онбординг (расчёт КБЖУ) или приветствие вернувшемуся |
+| `/calculate` | Калькулятор блюда по ингредиентам: накапливай список → КБЖУ на 100 г → сохрани в базу |
 | `/recommend [запрос]` | RAG-рекомендации (опциональный free-form: "что-то с белком на ужин") |
 | `/today` | КБЖУ за сегодня |
 | `/week` | Сводка за неделю |
 | `/open` | Открыть Mini App |
 | `/help` | Справка |
+| `/cancel` | Прервать активный диалог (онбординг, калькулятор, recipe builder) |
 
 ---
 
@@ -84,7 +105,7 @@
 | Vector DB | Qdrant (RAG + опционально семантический кэш) |
 | Embeddings | text-embedding-3-small |
 | Trace | LangSmith |
-| MCP | Python MCP SDK — Nutrition server (search_food, log_meal, get_daily_summary, lookup_by_barcode) |
+| MCP | Python MCP SDK — Nutrition server (`resolve_meal_item`, `lookup_food`, `compute_meal_item_nutrition`, `estimate_food_nutrition`) |
 | Frontend | React 18 + Vite + TypeScript + Tailwind |
 | Mini App | @telegram-apps/sdk-react, @telegram-apps/telegram-ui |
 | Backend deploy | Railway (api + postgres + qdrant) |
@@ -108,8 +129,8 @@ flowchart LR
     parser[📝 GPT-4o-mini]
     mcp[🔧 MCP Nutrition Server]
     pg[(PostgreSQL)]
-    qdrant[(Qdrant<br/>RAG)]
-    fs[FatSecret]
+    qdrant[(Qdrant<br/>RAG + disambig)]
+    estimate[🤖 GPT-4o-mini<br/>estimate]
     langsmith[LangSmith Trace]
 
     user -->|photo/voice/text| bot
@@ -122,41 +143,44 @@ flowchart LR
     langgraph --> parser
     langgraph --> mcp
     mcp --> pg
-    mcp --> qdrant
-    mcp -.fallback.-> fs
+    mcp -.last resort.-> estimate
+    langgraph -.disambig/recommend.-> qdrant
     langgraph -.traces.-> langsmith
 ```
 
-### Поток обработки фото
+### Поток обработки текста с disambiguation
 
 ```mermaid
 sequenceDiagram
     actor U as User
     participant T as Telegram
-    participant B as PTB Webhook
+    participant B as PTB Bot
     participant G as LangGraph
-    participant V as GPT-4o Vision
+    participant P as GPT-4o-mini
     participant M as MCP
-    participant D as Postgres
+    participant D as PostgreSQL
+    participant Q as Qdrant
 
-    U->>T: фото тарелки
+    U->>T: "сникерс 50г"
     T->>B: webhook update
-    B->>G: invoke graph
-    G->>V: analyze image
-    V-->>G: продукты + граммовка
-    par parallel lookup
-        G->>M: search_food
-        M->>D: PG cache
-        M->>M: Qdrant RAG
-        M->>M: FatSecret
-    end
+    B->>G: invoke graph (text)
+    G->>P: parse ingredients
+    P-->>G: [{name:"сникерс", amount:50, unit:"g"}]
+    G->>M: resolve_meal_item
+    M->>D: lookup by name/alias
+    D-->>M: hit / miss
     M-->>G: nutrition data
-    G-->>B: confirmation + inline keyboard
-    B-->>T: "Завтрак / Обед / Ужин / Перекус?"
-    U->>T: tap "Обед"
-    T->>B: callback
-    B->>M: log_meal
-    M->>D: INSERT meal + items
+    G-->>B: response_text + resolved items
+    B->>Q: top-3 semantic search "сникерс"
+    Q-->>B: [батончик 0.88, мороженое 0.82, мини 0.80]
+    B-->>T: "Уточни продукт:" + 3 inline buttons
+    U->>T: tap "Сникерс батончик"
+    T->>B: disambig callback
+    B-->>T: "Куда записать?" + meal-type keyboard
+    U->>T: tap "Перекус"
+    T->>B: save callback
+    B->>D: INSERT meal + meal_item
+    B-->>T: "✅ Записано в перекус"
 ```
 
 ---
@@ -232,9 +256,9 @@ nutrisnap/
 │   │   ├── core/              # config, settings
 │   │   ├── api/               # Mini App REST (/api/me, /day, /month, /foods/*, /meals/quick-add, /recommendations)
 │   │   ├── bot/
-│   │   │   ├── handlers/      # start, onboard, meal, recipe, recommend, common
+│   │   │   ├── handlers/      # start, onboard, meal, recipe, recommend, calculate, common
 │   │   │   ├── jobs.py        # PTB JobQueue: daily nudge + variety detection
-│   │   │   ├── keyboards.py   # inline-клавиатуры (Quick Add, meal-type, recipe)
+│   │   │   ├── keyboards.py   # inline-клавиатуры (Quick Add, meal-type, recipe, disambiguation)
 │   │   │   └── application.py # PTB Application + PicklePersistence
 │   │   ├── db/                # SQLAlchemy модели, session, seed_foods.py
 │   │   ├── graph/
@@ -246,7 +270,7 @@ nutrisnap/
 │   │   │   ├── qdrant.py      # singleton client, semantic search, auto-index hook
 │   │   │   └── ingest_foods.py# batch embed всего каталога
 │   │   ├── repositories/      # food_repo, meal_repo, user_repo
-│   │   ├── services/          # OpenAI, FatSecret, nutrition_calc, meal_drafts, recommendation_cache
+│   │   ├── services/          # nutrition_calc, meal_drafts, recipe_drafts, recommendation_cache, disambiguation_cache, nudge_throttle
 │   │   ├── evals/
 │   │   │   ├── golden.jsonl   # 44 кейса (ТГ-сообщения + FatSecret-эталоны + edge)
 │   │   │   └── run.py         # runner с pass-rate + MAPE per macro
@@ -367,7 +391,7 @@ docker compose -f docker-compose.dev.yml exec api python -m app.evals.run > /tmp
 | Требование | Статус | Где |
 |---|---|---|
 | LangGraph workflow с ветвлениями | ✅ | `backend/app/graph/graph.py` (meal) + `recommender.py` (RAG subgraph) |
-| MCP-сервер с 2+ tools | ⏳ | `backend/app/mcp/` (планируется) |
+| MCP-сервер с 2+ tools | ✅ | `backend/app/mcp/server.py` — 4 tools: `resolve_meal_item`, `lookup_food`, `compute_meal_item_nutrition`, `estimate_food_nutrition` |
 | Skill с SKILL.md | ⏳ | планируется (KZ-блюда skill) |
 | RAG-пайплайн | ✅ | `backend/app/rag/` (Qdrant + auto-index hook) |
 | Обработка документов / скрапинг | ✅ | FatSecret + кураторский seed |

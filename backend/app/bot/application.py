@@ -21,12 +21,15 @@ from app.bot.handlers.common import (
 )
 from app.bot.handlers.meal import (
     handle_cancel_meal_callback,
+    handle_disambiguation_callback,
+    handle_disambiguation_cancel_callback,
     handle_photo_message,
     handle_quick_add_callback,
     handle_save_meal_callback,
     handle_text_message,
     handle_voice_message,
 )
+from app.bot.handlers.calculate import build_calculate_handler
 from app.bot.handlers.onboard import build_onboarding_handler
 from app.bot.handlers.recipe import build_recipe_handler
 from app.bot.handlers.recommend import (
@@ -50,6 +53,10 @@ def register_handlers(application: Application) -> None:
     # the RSK flow. Must be registered BEFORE the generic text handler, otherwise
     # the weight/height/age inputs would be eaten by the meal parser.
     application.add_handler(build_onboarding_handler())
+
+    # Dish calculator — intercepts text/forwarded messages while active so they
+    # are not treated as standalone meal logs. Must be before generic text handler.
+    application.add_handler(build_calculate_handler())
 
     # Recipe builder — owns the `recipe:start:<draft_id>` callback. While active
     # it also intercepts photos and text messages, so it must be registered
@@ -79,6 +86,12 @@ def register_handlers(application: Application) -> None:
     )
     application.add_handler(
         CallbackQueryHandler(handle_cancel_meal_callback, pattern=r"^cancel:")
+    )
+    application.add_handler(
+        CallbackQueryHandler(handle_disambiguation_callback, pattern=r"^disambig:")
+    )
+    application.add_handler(
+        CallbackQueryHandler(handle_disambiguation_cancel_callback, pattern=r"^dcancel:")
     )
 
     # Scheduled jobs — daily morning nudge etc.

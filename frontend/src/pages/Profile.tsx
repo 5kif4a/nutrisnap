@@ -1,4 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Info } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
@@ -16,6 +17,7 @@ import {
 } from "../components/FormFields";
 import { api } from "../lib/api";
 import { useToast } from "../lib/toast";
+import { meQuery } from "../queries";
 import { profileFormSchema, type ProfileFormValues } from "../schemas/profile";
 import { greetingName } from "../telegram";
 import type {
@@ -79,7 +81,8 @@ function profileToForm(p: UserProfile): ProfileFormValues {
 
 export function Profile() {
   const toast = useToast();
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const queryClient = useQueryClient();
+  const { data: profile } = useQuery(meQuery());
   const [formulaOpen, setFormulaOpen] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -89,10 +92,8 @@ export function Profile() {
     handleSubmit,
     watch,
     reset,
-    formState: { errors, isDirty, isSubmitting },
+    formState: { errors, isDirty },
   } = useForm<ProfileFormValues>({
-    // `as any` is the standard workaround for zod-resolver's strict generic
-    // mismatch with z.object().superRefine() — the runtime contract is fine.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     resolver: zodResolver(profileFormSchema as any),
     defaultValues: DEFAULT_VALUES,
@@ -102,49 +103,44 @@ export function Profile() {
   const goal = watch("goal");
   const manualMode = watch("manual_targets");
 
+  // Populate the form once the profile query resolves.
   useEffect(() => {
-    api
-      .getMe()
-      .then((p) => {
-        setProfile(p);
-        reset(profileToForm(p));
-      })
-      .catch(() => {
-        // Suppressed for now — form just stays on DEFAULT_VALUES if the
-        // backend can't load the profile.
-      });
-    // reset is a stable ref → safe to leave out
+    if (profile) reset(profileToForm(profile));
+    // reset is a stable ref — safe to omit
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [profile]);
 
-  const onSubmit = async (values: ProfileFormValues) => {
-    try {
-      const payload: ProfileUpdate = {
-        sex: values.sex,
-        weight_kg: values.weight_kg,
-        height_cm: values.height_cm,
-        age: values.age,
-        activity: values.activity,
-        goal: values.goal,
-        target_weight_kg:
-          values.goal === "maintain" ? null : (values.target_weight_kg ?? null),
-        manual_targets: values.manual_targets,
-        target_kcal: values.manual_targets ? values.target_kcal : null,
-        target_protein_g: values.manual_targets
-          ? values.target_protein_g
-          : null,
-        target_fat_g: values.manual_targets ? values.target_fat_g : null,
-        target_carbs_g: values.manual_targets ? values.target_carbs_g : null,
-      };
-      const updated = await api.updateMe(payload);
-      setProfile(updated);
+  const updateMutation = useMutation({
+    mutationFn: (payload: ProfileUpdate) => api.updateMe(payload),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(["me"], updated);
       reset(profileToForm(updated), { keepDefaultValues: false });
       toast.success("Сохранено", "Дневная норма обновлена");
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2000);
-    } catch (e) {
+    },
+    onError: (e) => {
       toast.error("Не удалось сохранить", (e as Error).message);
-    }
+    },
+  });
+
+  const onSubmit = (values: ProfileFormValues) => {
+    const payload: ProfileUpdate = {
+      sex: values.sex,
+      weight_kg: values.weight_kg,
+      height_cm: values.height_cm,
+      age: values.age,
+      activity: values.activity,
+      goal: values.goal,
+      target_weight_kg:
+        values.goal === "maintain" ? null : (values.target_weight_kg ?? null),
+      manual_targets: values.manual_targets,
+      target_kcal: values.manual_targets ? values.target_kcal : null,
+      target_protein_g: values.manual_targets ? values.target_protein_g : null,
+      target_fat_g: values.manual_targets ? values.target_fat_g : null,
+      target_carbs_g: values.manual_targets ? values.target_carbs_g : null,
+    };
+    updateMutation.mutate(payload);
   };
 
   return (
@@ -266,7 +262,7 @@ export function Profile() {
         )}
       </div>
 
-      {/* Manual targets card — Controller for the toggle, register for inputs. */}
+      {/* Manual targets card. */}
       <div className="surface-card mb-4 p-5 shadow-sm">
         <Controller
           control={control}
@@ -321,7 +317,6 @@ export function Profile() {
         )}
       </div>
 
-      {/* Hint + info-trigger for the formula bottom-sheet. */}
       <button
         type="button"
         onClick={() => setFormulaOpen(true)}
@@ -333,7 +328,7 @@ export function Profile() {
 
       <button
         type="submit"
-        disabled={isSubmitting || !isDirty}
+        disabled={updateMutation.isPending || !isDirty}
         className="liquid-glass flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3.5 text-base font-semibold text-white transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
         style={{
           background: saved
@@ -342,7 +337,7 @@ export function Profile() {
         }}
       >
         {saved && <Check size={18} />}
-        {isSubmitting
+        {updateMutation.isPending
           ? "Сохраняю…"
           : saved
             ? "Сохранено"
@@ -356,11 +351,7 @@ export function Profile() {
   );
 }
 
-// `control` is intentionally untyped at the boundary; consumers above already
-// type their own Controller renders. Re-export only what page-level needs.
 export type _ControlBoundary = Control<ProfileFormValues>;
-
-/* ───────── Mifflin-St Jeor explainer — bottom sheet ───────── */
 
 function FormulaSheet({ onClose }: { onClose: () => void }) {
   return (

@@ -117,6 +117,39 @@ def schedule_food_indexing(food: Food) -> None:
     asyncio.create_task(index_food_in_qdrant(food))
 
 
+_DISAMBIG_MIN_SCORE = 0.50
+_DISAMBIG_MAX_SPREAD = 0.20  # top-1 minus top-2 must be ≤ this to flag ambiguity
+
+
+async def fetch_disambiguation_candidates(
+    query: str, *, limit: int = 3
+) -> list[dict]:
+    """Return top Qdrant hits if they're close enough to be ambiguous.
+
+    Returns an empty list when there's a single clear winner (score gap > 0.20)
+    or when fewer than 2 candidates meet the minimum score threshold.
+    Each dict is the raw Qdrant payload with an added "score" key.
+    """
+    results = await search_foods_semantic(query, limit=limit + 1)
+    scored = [r for r in results if r.get("score", 0) >= _DISAMBIG_MIN_SCORE]
+    if len(scored) < 2:
+        return []
+    if scored[0]["score"] - scored[1]["score"] > _DISAMBIG_MAX_SPREAD:
+        return []
+
+    # Deduplicate by lowercased name so "Сникерс" and "сникерс" don't both appear.
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for r in scored[:limit]:
+        key = (r.get("name") or "").lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(r)
+
+    return unique if len(unique) >= 2 else []
+
+
 async def search_foods_semantic(
     query: str,
     *,

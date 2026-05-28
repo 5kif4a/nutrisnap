@@ -31,6 +31,8 @@ export default defineConfig({
             return "vendor-form";
           }
           if (id.includes("lucide-react")) return "vendor-icons";
+          if (id.includes("@tanstack/react-router")) return "vendor-router";
+          if (id.includes("@tanstack/react-query")) return "vendor-query";
           // Anything else from node_modules stays in the default chunk —
           // returning undefined avoids forcing a separate "vendor" chunk
           // that would create a circular dep with vendor-react.

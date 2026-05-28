@@ -1,10 +1,11 @@
 # Nutrition Lookup — пайплайн поиска продуктов
 
-> ⚠️ **Open Food Facts удалён из пайплайна.** Публичный API упирался в rate-limit
-> (503), поэтому шаги "OFF barcode" и "OFF text search" вырезаны из кода
-> (`app/services/openfoodfacts.py` снесён, `FoodSource.OPEN_FOOD_FACTS` удалён).
-> Цепочка теперь: local cache → FatSecret → GPT estimate. Разделы ниже оставлены
-> как исторический контекст.
+> **Актуальное состояние (май 2026):**
+> - Open Food Facts удалён: rate-limit 503 в продакшене.
+> - FatSecret удалён: whitelist IP несовместим с Railway без дорогого add-on.
+> - Qdrant используется только для Recommender и Disambiguation, не для основного resolve.
+>
+> Основной пайплайн: **PG local cache → GPT-4o-mini estimate**.
 
 ## Цель
 
@@ -12,16 +13,25 @@
 
 ---
 
-## Цепочка приоритетов (актуальная)
+## Актуальная цепочка (MCP `resolve_meal_item`)
 
-| # | Источник | Покрытие | Цена |
+| # | Источник | Покрытие | Задержка |
 |---|---|---|---|
-| 1 | PostgreSQL local cache | ~80% после "прогрева" базы | 10ms |
-| 2 | Qdrant RAG (curated regional + raw foods) | западные продукты, семантика | 50ms + embedding |
-| 3 | FatSecret API | редкие EN-only продукты | 500ms |
-| 4 | GPT-4o-mini estimate | last resort, "оцени КБЖУ для X" | 1-2s + cost |
+| 1 | PostgreSQL local cache — barcode → name/alias | ~80% после прогрева | 10 мс |
+| 2 | GPT-4o-mini estimate — **ephemeral**, не сохраняется в каталог | last resort | 1–2 с |
 
-**Главный принцип:** база растёт сама. Каждый успешный lookup сохраняется в локальный кэш с alias'ами. Через месяц 90% запросов из PostgreSQL.
+**Главный принцип:** база растёт сама. Каждый `user_recipe` и curated-запись автоматически embed'ится в Qdrant (`schedule_food_indexing`), поэтому рекомендатор видит каталог в реальном времени без ручного reindex.
+
+## Qdrant — роль в системе
+
+Qdrant (`text-embedding-3-small`, collection `foods`) используется в двух местах, но **не** в основном пайплайне `resolve_meal_item`:
+
+| Место | Что делает |
+|---|---|
+| Recommender subgraph | top-20 семантических кандидатов по дефициту БЖУ |
+| Disambiguation (`fetch_disambiguation_candidates`) | top-3 альтернативы при текстовом/голосовом вводе одного продукта; только когда score spread ≤ 0.20 |
+
+---
 
 ---
 
@@ -232,47 +242,46 @@ def infer_meal_type(now: datetime) -> str:
 
 ---
 
-## Граф (обновлённый)
+## Граф (актуальный)
 
 ```
-input_router
-  ├─ photo
-  │    ├─ barcode_detector_node  (pyzbar)
-  │    │    ├─ found → off_lookup_by_barcode → nutrition_fetch
-  │    │    └─ not found → vision_node
-  │    └─ vision_node (GPT-4o с расширенным промптом)
-  │         └─ если в выводе есть barcode → cross-check с OFF
-  │
-  ├─ voice → stt → text_parser
-  └─ text  → text_parser
+route_node
+  ├─ photo  → vision_node (GPT-4o) → parser_node → nutrition_fetch_node
+  ├─ voice  → transcribe_node (Whisper) → parser_node → nutrition_fetch_node
+  └─ text   → guiderail_node → parser_node → nutrition_fetch_node
 
-text_parser → nutrition_fetch
-nutrition_fetch:
-  → asyncio.gather(
-      pg_cache.search(name),
-      qdrant_search(name),
-      off_text_search(name),
-    )
-  → если ничего → fatsecret (translate to EN)
-  → если и это пусто → gpt_estimate(name)
+nutrition_fetch_node (per parsed item):
+  → MCP.resolve_meal_item(name, amount, unit)
+      1. pg_cache.search(barcode) if barcode
+      2. pg_cache.search(name/alias)
+      3. gpt_mini_estimate(name)   ← только если PG miss
+  → reflect_node (anti-hallucination check)
+  → finalize_node → response_text
+
+bot-side (post-graph, text/voice single-item):
+  → Qdrant.fetch_disambiguation_candidates(food_name)
+      если top-2 scores в пределах 0.20 → show top-3 inline buttons
+      иначе → show meal-type keyboard
 ```
 
 ---
 
-## Список задач для реализации
+## Статус задач
 
-- [ ] **F1** Добавить `barcode_detector_node` в LangGraph + `pyzbar` в зависимости
-- [ ] **F2** Сервис `app/services/openfoodfacts.py` с двумя методами: `lookup_by_barcode`, `text_search`
-- [ ] **F3** Миграция Alembic: добавить `brand`, `barcode`, индексы
-- [ ] **F4** Обновить промпт `vision_node` для чтения этикеток + Pydantic schema с полями brand/barcode
-- [ ] **F5** Добавить tool `lookup_by_barcode` в MCP-сервер
-- [ ] **F6** Seed-скрипт `scripts/seed_curated_foods.py` с кураторской базой региональных блюд СНГ (KZ/RU/UZ/GE...), tag по `cuisine`
-- [ ] **F7** UGC: API + Mini App страница "Мои блюда"
-- [ ] **F8** Обновить `nutrition_fetch` с цепочкой приоритетов (local → qdrant → OFF → FatSecret → GPT estimate)
-- [ ] **F9** Кэш upsert: каждый успешный внешний lookup сохраняется в `foods` с alias'ами
-- [ ] **F10** Quick add: API + бот inline keyboard с recent/frequent per meal_type
-- [ ] **F11** Smart meal type inference по времени суток в `confirm_node`
-- [ ] **F12** Forward & batch parsing — обрабатывать пересланные сообщения (от друзей/диетологов) и многострочные заметки ("рис 150\nкурица 200")
+- [ ] **F1** `barcode_detector_node` — pyzbar для декодирования штрих-кода с фото
+- ~~**F2** Open Food Facts~~ — удалён (rate-limit 503)
+- [x] **F3** Миграция Alembic: `brand`, `barcode`, индексы — выполнено
+- [x] **F4** Промпт `vision_node` для чтения этикеток — выполнено
+- [x] **F5** MCP-сервер с 4 tools (`resolve_meal_item`, `lookup_food`, `compute_meal_item_nutrition`, `estimate_food_nutrition`) — выполнено
+- [x] **F6** Curated seed (~41 продукт реального рациона) — выполнено
+- [x] **F7** UGC: recipe builder (photo-based), `/calculate` (text-based) — выполнено
+- [x] **F8** Nutrition pipeline: PG cache → GPT estimate — выполнено
+- [x] **F9** Auto-index hook: `schedule_food_indexing` fire-and-forget — выполнено
+- [x] **F10** Quick add: bot inline keyboard с recent/frequent per meal_type — выполнено
+- [x] **F11** Smart meal type inference по времени суток — выполнено
+- [x] **F12** Forward & batch parsing, многострочный текст — выполнено
+- [x] **F-new** Disambiguation top-3: Qdrant top-k при неоднозначном запросе — выполнено
+- [x] **F-new** `/calculate` ConversationHandler: накопление ингредиентов → КБЖУ на 100 г → сохранение — выполнено
 
 ---
 

@@ -1,8 +1,14 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Plus, Search, Trash2, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { FoodForm } from "../components/FoodForm";
 import { MealTypeSheet } from "../components/MealTypeSheet";
 import { api } from "../lib/api";
+import {
+  frequentFoodsQuery,
+  recentFoodsQuery,
+  searchFoodsQuery,
+} from "../queries";
 import type {
   BulkAddItem,
   FoodMetric,
@@ -32,19 +38,16 @@ const UNIT_SHORT: Record<FoodMetric, string> = {
   serving: "порц",
 };
 
-/** A food in the selection basket: original food + user-edited amount. */
 interface SelectedItem {
   key: string;
   food: QuickAddFoodOut;
   amount: number;
 }
 
-/** Stable key for matching basket items against list rows. */
 function keyFor(food: QuickAddFoodOut): string {
   return food.food_id ?? `name:${food.food_name}`;
 }
 
-/** Scale a food row's macros to the user-edited portion. */
 function scale(food: QuickAddFoodOut, newAmount: number) {
   const factor = food.amount > 0 ? newAmount / food.amount : 0;
   return {
@@ -57,70 +60,64 @@ function scale(food: QuickAddFoodOut, newAmount: number) {
 }
 
 export function MyFoods() {
+  const queryClient = useQueryClient();
   const [tab, setTab] = useState<FoodsTab>("recent");
-  const [recent, setRecent] = useState<QuickAddFoodOut[]>([]);
-  const [frequent, setFrequent] = useState<QuickAddFoodOut[]>([]);
-  const [searchResults, setSearchResults] = useState<QuickAddFoodOut[]>([]);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [searchInput, setSearchInput] = useState("");
   const [selection, setSelection] = useState<Map<string, SelectedItem>>(
     () => new Map(),
   );
   const [mealPickerOpen, setMealPickerOpen] = useState(false);
   const [foodFormOpen, setFoodFormOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
-  const reloadHistory = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [rec, freq] = await Promise.all([
-        api.getRecentFoods({ limit: 20 }),
-        api.getFrequentFoods({ limit: 20 }),
-      ]);
-      const freqNames = new Set(freq.map((f) => f.food_name.toLowerCase()));
-      setRecent(rec.filter((r) => !freqNames.has(r.food_name.toLowerCase())));
-      setFrequent(freq);
-    } catch {
-      setRecent([]);
-      setFrequent([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const recentResult = useQuery({
+    ...recentFoodsQuery(20),
+    placeholderData: [],
+  });
+  const frequentResult = useQuery({
+    ...frequentFoodsQuery(20),
+    placeholderData: [],
+  });
+  const searchResult = useQuery({
+    ...searchFoodsQuery(searchInput),
+    placeholderData: [],
+  });
 
-  // Initial load + after every successful bulk save.
-  useEffect(() => {
-    void reloadHistory();
-  }, [reloadHistory]);
+  const recent = useMemo(() => {
+    const freq = frequentResult.data ?? [];
+    const rec = recentResult.data ?? [];
+    const freqNames = new Set(freq.map((f) => f.food_name.toLowerCase()));
+    return rec.filter((r) => !freqNames.has(r.food_name.toLowerCase()));
+  }, [recentResult.data, frequentResult.data]);
 
-  // Debounced catalog search on the search tab.
-  useEffect(() => {
-    if (tab !== "search") return;
-    const q = searchQuery.trim();
-    if (q.length < 2) {
-      setSearchResults([]);
-      return;
-    }
-    let cancelled = false;
-    const t = setTimeout(async () => {
-      setLoading(true);
-      try {
-        const rows = await api.searchFoods({ q, limit: 25 });
-        if (!cancelled) setSearchResults(rows);
-      } catch {
-        if (!cancelled) setSearchResults([]);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }, 250);
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [searchQuery, tab]);
+  const frequent = frequentResult.data ?? [];
+  const searchResults = searchResult.data ?? [];
 
-  const toggleSelect = useCallback((food: QuickAddFoodOut) => {
+  const loading =
+    tab === "search"
+      ? searchResult.isFetching && searchInput.trim().length >= 2
+      : recentResult.isLoading || frequentResult.isLoading;
+
+  const saveMutation = useMutation({
+    mutationFn: (args: { mealType: MealType; items: BulkAddItem[] }) =>
+      api.bulkAddMeal({ meal_type: args.mealType, items: args.items }),
+    onSuccess: (_, { mealType, items }) => {
+      void queryClient.invalidateQueries({ queryKey: ["foods", "recent"] });
+      void queryClient.invalidateQueries({ queryKey: ["foods", "frequent"] });
+      void queryClient.invalidateQueries({ queryKey: ["day"] });
+      void queryClient.invalidateQueries({ queryKey: ["month"] });
+      setToast(`✅ ${items.length} позиц. → ${MEAL_TYPE_LABELS[mealType]}`);
+      setSelection(new Map());
+      setMealPickerOpen(false);
+      setTimeout(() => setToast(null), 2400);
+    },
+    onError: (e) => {
+      setToast(`⚠️ ${(e as Error).message}`);
+      setTimeout(() => setToast(null), 2400);
+    },
+  });
+
+  const toggleSelect = (food: QuickAddFoodOut) => {
     setSelection((prev) => {
       const next = new Map(prev);
       const k = keyFor(food);
@@ -131,9 +128,9 @@ export function MyFoods() {
       }
       return next;
     });
-  }, []);
+  };
 
-  const updateAmount = useCallback((key: string, amount: number) => {
+  const updateAmount = (key: string, amount: number) => {
     setSelection((prev) => {
       const cur = prev.get(key);
       if (!cur) return prev;
@@ -141,16 +138,16 @@ export function MyFoods() {
       next.set(key, { ...cur, amount: Number.isFinite(amount) ? amount : 0 });
       return next;
     });
-  }, []);
+  };
 
-  const removeFromSelection = useCallback((key: string) => {
+  const removeFromSelection = (key: string) => {
     setSelection((prev) => {
       if (!prev.has(key)) return prev;
       const next = new Map(prev);
       next.delete(key);
       return next;
     });
-  }, []);
+  };
 
   const totals = useMemo(() => {
     let kcal = 0;
@@ -160,47 +157,31 @@ export function MyFoods() {
     return { count: selection.size, kcal };
   }, [selection]);
 
-  const handleSave = useCallback(
-    async (mealType: MealType) => {
-      if (saving) return;
-      const items: BulkAddItem[] = [];
-      for (const s of selection.values()) {
-        if (s.amount <= 0) continue;
-        const scaled = scale(s.food, s.amount);
-        items.push({
-          food_name: s.food.food_name,
-          amount: s.amount,
-          unit: s.food.unit,
-          weight_g: scaled.weight_g,
-          kcal: scaled.kcal,
-          protein_g: scaled.protein_g,
-          fat_g: scaled.fat_g,
-          carbs_g: scaled.carbs_g,
-          food_id: s.food.food_id,
-        });
-      }
-      if (items.length === 0) {
-        setMealPickerOpen(false);
-        return;
-      }
-      setSaving(true);
-      try {
-        await api.bulkAddMeal({ meal_type: mealType, items });
-        setToast(`✅ ${items.length} позиц. → ${MEAL_TYPE_LABELS[mealType]}`);
-        setSelection(new Map());
-        setMealPickerOpen(false);
-        await reloadHistory();
-      } catch (e) {
-        setToast(`⚠️ ${(e as Error).message}`);
-      } finally {
-        setSaving(false);
-        setTimeout(() => setToast(null), 2400);
-      }
-    },
-    [saving, selection, reloadHistory],
-  );
+  const handleSave = (mealType: MealType) => {
+    const items: BulkAddItem[] = [];
+    for (const s of selection.values()) {
+      if (s.amount <= 0) continue;
+      const scaled = scale(s.food, s.amount);
+      items.push({
+        food_name: s.food.food_name,
+        amount: s.amount,
+        unit: s.food.unit,
+        weight_g: scaled.weight_g,
+        kcal: scaled.kcal,
+        protein_g: scaled.protein_g,
+        fat_g: scaled.fat_g,
+        carbs_g: scaled.carbs_g,
+        food_id: s.food.food_id,
+      });
+    }
+    if (items.length === 0) {
+      setMealPickerOpen(false);
+      return;
+    }
+    saveMutation.mutate({ mealType, items });
+  };
 
-  const handleProductCreated = useCallback((food: QuickAddFoodOut) => {
+  const handleProductCreated = (food: QuickAddFoodOut) => {
     setFoodFormOpen(false);
     setSelection((prev) => {
       const next = new Map(prev);
@@ -210,7 +191,7 @@ export function MyFoods() {
     });
     setToast(`✅ Создан «${food.food_name}» — добавлен в корзину`);
     setTimeout(() => setToast(null), 2400);
-  }, []);
+  };
 
   const visibleList = useMemo<QuickAddFoodOut[]>(() => {
     if (tab === "search") return searchResults;
@@ -221,26 +202,20 @@ export function MyFoods() {
   const emptyMessage = useMemo(() => {
     if (loading) return null;
     if (tab === "search") {
-      return searchQuery.trim().length < 2
+      return searchInput.trim().length < 2
         ? "Начни вводить название — найду в каталоге"
         : "Ничего не нашёл по этому запросу";
     }
-    if (tab === "recent") {
-      return "Здесь будут последние добавления";
-    }
+    if (tab === "recent") return "Здесь будут последние добавления";
     return "Здесь будут продукты, которые ты ешь чаще всего";
-  }, [tab, loading, searchQuery]);
+  }, [tab, loading, searchInput]);
 
   return (
     <div
       className="mx-auto max-w-md px-4 pt-16"
-      style={{
-        // Reserve room at the bottom for the basket bar + nav, otherwise the
-        // last row hides under them.
-        paddingBottom: selection.size > 0 ? 180 : 128,
-      }}
+      style={{ paddingBottom: selection.size > 0 ? 180 : 128 }}
     >
-      {/* Three-tab switcher — FatSecret style. */}
+      {/* Three-tab switcher. */}
       <div className="mb-3 flex border-b border-tg-card">
         {TABS.map((t) => {
           const selected = tab === t.v;
@@ -249,9 +224,7 @@ export function MyFoods() {
               key={t.v}
               onClick={() => setTab(t.v)}
               className="relative flex-1 px-2 py-3 text-sm font-medium transition"
-              style={{
-                color: selected ? "var(--accent)" : "var(--tg-hint)",
-              }}
+              style={{ color: selected ? "var(--accent)" : "var(--tg-hint)" }}
             >
               {t.label}
               {selected && (
@@ -271,15 +244,15 @@ export function MyFoods() {
             <Search size={18} className="shrink-0 text-tg-hint" />
             <input
               type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Поиск продукта"
               className="flex-1 bg-transparent text-sm text-tg-text outline-none placeholder:text-tg-hint"
               autoFocus
             />
-            {searchQuery && (
+            {searchInput && (
               <button
-                onClick={() => setSearchQuery("")}
+                onClick={() => setSearchInput("")}
                 aria-label="Очистить"
                 className="shrink-0 text-tg-hint active:scale-90"
               >
@@ -328,14 +301,12 @@ export function MyFoods() {
       {selection.size > 0 && !mealPickerOpen && (
         <div
           className="pointer-events-none fixed inset-x-0 z-40"
-          style={{
-            bottom: "calc(env(safe-area-inset-bottom, 0px) + 88px)",
-          }}
+          style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 88px)" }}
         >
           <div className="mx-auto flex max-w-md justify-end px-4">
             <button
               onClick={() => setMealPickerOpen(true)}
-              className="liquid-glass pointer-events-auto flex items-center gap-3 rounded-full pl-4 pr-2 py-2 text-white shadow-lg active:scale-[0.98]"
+              className="liquid-glass pointer-events-auto flex items-center gap-3 rounded-full py-2 pl-4 pr-2 text-white shadow-lg active:scale-[0.98]"
               style={{
                 background:
                   "linear-gradient(135deg, var(--accent), rgba(120,92,220,0.95))",
@@ -352,12 +323,11 @@ export function MyFoods() {
         </div>
       )}
 
-      {/* Meal-type picker sheet — shared with FabActionSheet. */}
       <MealTypeSheet
         open={mealPickerOpen}
         onPick={handleSave}
         onClose={() => setMealPickerOpen(false)}
-        saving={saving}
+        saving={saveMutation.isPending}
         count={totals.count}
         kcal={totals.kcal}
       />
@@ -416,9 +386,7 @@ function FoodRow({
     <li>
       <div
         className="rounded-2xl bg-tg-card shadow-sm transition"
-        style={{
-          outline: isSelected ? "2px solid var(--accent)" : "none",
-        }}
+        style={{ outline: isSelected ? "2px solid var(--accent)" : "none" }}
       >
         <button
           onClick={onToggle}

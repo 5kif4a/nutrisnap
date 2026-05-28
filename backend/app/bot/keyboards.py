@@ -88,6 +88,34 @@ def build_meal_type_keyboard(
     return InlineKeyboardMarkup(rows)
 
 
+def build_disambiguation_keyboard(
+    token: str, candidates: list[dict]
+) -> InlineKeyboardMarkup:
+    """Inline keyboard asking the user to pick one of the top-k Qdrant hits.
+
+    Each button fires `disambig:<token>:<idx>` so the handler can retrieve the
+    full candidate from the stash by index without hitting 64-byte callback limit.
+    """
+    rows: list[list[InlineKeyboardButton]] = []
+    for idx, c in enumerate(candidates):
+        name = c.get("name") or ""
+        brand = c.get("brand") or ""
+        kcal = c.get("kcal") or 0.0
+        label = f"{name} {brand}".strip()
+        if len(label) > 24:
+            label = label[:23] + "…"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"{label} — {kcal:.0f} ккал/100г",
+                    callback_data=f"disambig:{token}:{idx}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton("✖️ Отмена", callback_data=f"dcancel:{token}")])
+    return InlineKeyboardMarkup(rows)
+
+
 def build_recipe_collecting_keyboard() -> InlineKeyboardMarkup:
     """Keyboard shown during the COLLECTING stage of the recipe builder."""
     return InlineKeyboardMarkup(

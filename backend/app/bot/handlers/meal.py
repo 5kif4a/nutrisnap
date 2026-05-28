@@ -12,7 +12,7 @@ from telegram import Update
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
-from app.bot.keyboards import build_meal_type_keyboard
+from app.bot.keyboards import build_disambiguation_keyboard, build_meal_type_keyboard
 from app.db.models import InputSource, MealType
 from app.db.session import async_session_factory
 from app.graph.graph import get_meal_graph
@@ -31,6 +31,11 @@ from app.repositories.user_repo import (
     upsert_user_from_telegram,
 )
 from app.graph.recommender import get_recommender_graph
+from app.services.disambiguation_cache import (
+    DisambiguationEntry,
+    pop_disambiguation,
+    stash_disambiguation,
+)
 from app.services.meal_drafts import (
     MealDraft,
     append_to_draft,
@@ -325,7 +330,11 @@ async def _maybe_send_follow_up(
         text += f"\n_{pick.rationale_short}_"
 
     try:
-        await context.bot.send_message(chat_id=chat_id, text=text)
+        from telegram.constants import ParseMode
+
+        await context.bot.send_message(
+            chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN
+        )
     except TelegramError:
         logger.exception("Follow-up send failed for user %s", telegram_user_id)
 
@@ -551,6 +560,35 @@ async def _run_graph_and_post(
         return
 
     items: list[MealItemPayload] = [r["payload"] for r in resolved]
+
+    # Disambiguation: for single-item text/voice input, offer top-3 Qdrant
+    # candidates so the user can confirm which product they meant.
+    if source in (InputSource.TEXT, InputSource.VOICE) and len(items) == 1:
+        from app.rag.qdrant import fetch_disambiguation_candidates
+
+        candidates = await fetch_disambiguation_candidates(items[0].food_name)
+        if candidates:
+            entry = DisambiguationEntry(
+                candidates=candidates,
+                amount=items[0].amount,
+                unit=str(items[0].unit),
+                user_telegram_id=telegram_user_id,
+                source=source,
+                raw_input=raw_input,
+                tg_message_id=tg_message_id,
+                eaten_at=infer_meal_type_and_time(),
+            )
+            token = await stash_disambiguation(entry)
+            keyboard = build_disambiguation_keyboard(token, candidates)
+            await _safe_edit(
+                context,
+                chat_id,
+                thinking_msg_id,
+                f"{response_text}\n\n📍 Уточни продукт:",
+                reply_markup=keyboard,
+            )
+            return
+
     quick_add_pool = await _build_quick_add_pool(
         telegram_user_id, exclude_food_names={it.food_name for it in items}
     )
@@ -659,6 +697,122 @@ def infer_meal_type_and_time():
     return datetime.now(timezone.utc)
 
 
+async def handle_disambiguation_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """User tapped one of the top-k food candidates — resolve its portion and show meal-type keyboard."""
+    query = update.callback_query
+    if query is None or query.data is None or update.effective_user is None:
+        return
+    await query.answer()
+
+    try:
+        _, token, idx_str = query.data.split(":", 2)
+        idx = int(idx_str)
+    except ValueError:
+        await query.edit_message_text("⚠️ Неверный callback")
+        return
+
+    entry = await pop_disambiguation(token)
+    if entry is None:
+        await query.edit_message_text("⏱ Уточнение уже не активно — отправь ещё раз.")
+        return
+    if not 0 <= idx < len(entry.candidates):
+        await query.answer("⚠️ Вариант недоступен", show_alert=True)
+        return
+
+    candidate = entry.candidates[idx]
+
+    # Build a transient Food so we can reuse compute_meal_item_nutrition.
+    from app.db.models import FoodMetric
+    from app.services.nutrition_calc import compute_meal_item_nutrition
+    from app.db.models import Food  # noqa: PLC0415 — lazy import to keep handler light
+
+    transient = Food(
+        name=candidate.get("name", ""),
+        metric=candidate.get("metric", "g"),
+        kcal=float(candidate.get("kcal") or 0),
+        protein_g=float(candidate.get("protein_g") or 0),
+        fat_g=float(candidate.get("fat_g") or 0),
+        carbs_g=float(candidate.get("carbs_g") or 0),
+        piece_weight_g=candidate.get("piece_weight_g"),
+    )
+
+    try:
+        portion = compute_meal_item_nutrition(transient, entry.amount, FoodMetric(entry.unit))
+    except ValueError:
+        await query.edit_message_text(
+            "⚠️ Не удалось посчитать порцию — попробуй ввести по-другому."
+        )
+        return
+
+    from uuid import UUID
+
+    food_id_str = candidate.get("food_id")
+    payload = MealItemPayload(
+        food_name=transient.name,
+        amount=entry.amount,
+        unit=FoodMetric(entry.unit),
+        weight_g=portion.weight_g,
+        kcal=portion.kcal,
+        protein_g=portion.protein_g,
+        fat_g=portion.fat_g,
+        carbs_g=portion.carbs_g,
+        food_id=UUID(food_id_str) if food_id_str else None,
+    )
+
+    quick_add_pool = await _build_quick_add_pool(
+        entry.user_telegram_id, exclude_food_names={payload.food_name}
+    )
+    draft = MealDraft(
+        user_telegram_id=entry.user_telegram_id,
+        items=[payload],
+        source=entry.source,
+        raw_input=entry.raw_input,
+        tg_message_id=entry.tg_message_id,
+        eaten_at=entry.eaten_at,
+        quick_add_pool=quick_add_pool,
+    )
+    draft_id = await stash_draft(draft)
+
+    summary = (
+        f"📋 Выбрано:\n"
+        f"• {payload.food_name} — {payload.amount:g} {payload.unit}\n"
+        f"  ({payload.kcal:.0f} ккал, Б {payload.protein_g:.0f} / "
+        f"Ж {payload.fat_g:.0f} / У {payload.carbs_g:.0f})\n\n"
+        f"Куда записать?"
+    )
+    keyboard = build_meal_type_keyboard(
+        draft_id,
+        with_recipe_option=False,
+        quick_add_pool=quick_add_pool,
+    )
+    if query.message is not None:
+        await _safe_edit(
+            context,
+            query.message.chat_id,
+            query.message.message_id,
+            summary,
+            reply_markup=keyboard,
+        )
+
+
+async def handle_disambiguation_cancel_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """User cancelled food disambiguation."""
+    query = update.callback_query
+    if query is None or query.data is None:
+        return
+    await query.answer()
+    try:
+        _, token = query.data.split(":", 1)
+    except ValueError:
+        token = ""
+    await pop_disambiguation(token)
+    await query.edit_message_text("✖️ Отменено")
+
+
 __all__ = [
     "handle_photo_message",
     "handle_voice_message",
@@ -666,6 +820,8 @@ __all__ = [
     "handle_quick_add_callback",
     "handle_save_meal_callback",
     "handle_cancel_meal_callback",
+    "handle_disambiguation_callback",
+    "handle_disambiguation_cancel_callback",
 ]
 
 

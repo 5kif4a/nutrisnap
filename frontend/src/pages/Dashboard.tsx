@@ -1,5 +1,12 @@
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { CircularProgress } from "../components/CircularProgress";
 import { FabActionSheet } from "../components/FabActionSheet";
 import { FoodForm } from "../components/FoodForm";
@@ -8,20 +15,15 @@ import { MealCard } from "../components/MealCard";
 import { MealTypeSheet } from "../components/MealTypeSheet";
 import { api } from "../lib/api";
 import { humanDate, monthOf, todayISO, weekGrid } from "../lib/date";
+import { dayQuery, monthQuery } from "../queries";
 import type {
   BulkAddItem,
   DayResponse,
   DayStatus,
   MealType,
-  MonthDay,
   QuickAddFoodOut,
   ResolvedItem,
 } from "../types";
-
-interface Props {
-  date: string;
-  onDateChange: (iso: string) => void;
-}
 
 const emptyDay = (date: string): DayResponse => ({
   date,
@@ -39,82 +41,76 @@ const STATUS_BG: Record<DayStatus, string> = {
   empty: "var(--tg-border)",
 };
 
-export function Dashboard({ date, onDateChange }: Props) {
-  const [data, setData] = useState<DayResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  // Statuses for the visible week strip — keyed by ISO date. We fetch the
-  // months that intersect the week so colours stay correct across month edges.
-  const [weekStatus, setWeekStatus] = useState<Map<string, MonthDay>>(
-    () => new Map(),
-  );
+export function Dashboard() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { date: searchDate } = useSearch({ from: "/dashboard" });
+  const date = searchDate ?? todayISO();
 
-  // FAB action-sheet state. `pendingItems` is the basket the user is about
-  // to save (either from a vision-resolved photo OR a single manually-created
-  // food). When non-empty + mealPickerOpen → MealTypeSheet shows.
+  const { data, isLoading } = useQuery({
+    ...dayQuery(date),
+    placeholderData: emptyDay(date),
+  });
+
   const [actionSheetOpen, setActionSheetOpen] = useState(false);
   const [foodFormOpen, setFoodFormOpen] = useState(false);
   const [pendingItems, setPendingItems] = useState<BulkAddItem[]>([]);
   const [mealPickerOpen, setMealPickerOpen] = useState(false);
-  const [savingMeal, setSavingMeal] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
-  const load = useCallback(async (d: string) => {
-    setLoading(true);
-    try {
-      setData(await api.getDay(d));
-    } catch {
-      // Backend hiccup (e.g. 500) — render an empty day instead of an error
-      // wall. The bottom-nav still works; user can retry by re-tapping the day.
-      setData(emptyDay(d));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    load(date);
-  }, [date, load]);
-
   const week = useMemo(() => weekGrid(date), [date]);
-  // Comma-joined month list — string key so the effect only re-fires when
-  // the *months* covered by the week change, not every day navigation.
-  const weekMonthsKey = useMemo(
-    () => Array.from(new Set([monthOf(week[0]), monthOf(week[6])])).join(","),
+  const weekMonths = useMemo(
+    () => Array.from(new Set([monthOf(week[0]), monthOf(week[6])])),
     [week],
   );
 
-  // Fetch (and merge) statuses for the months that intersect the visible week.
-  useEffect(() => {
-    let cancelled = false;
-    const months = weekMonthsKey.split(",");
-    (async () => {
-      try {
-        const responses = await Promise.all(months.map((m) => api.getMonth(m)));
-        if (cancelled) return;
-        const map = new Map<string, MonthDay>();
-        for (const r of responses) for (const d of r.days) map.set(d.date, d);
-        setWeekStatus(map);
-      } catch {
-        if (!cancelled) setWeekStatus(new Map());
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [weekMonthsKey]);
+  const monthResults = useQueries({
+    queries: weekMonths.map((m) => monthQuery(m)),
+  });
 
-  const handleDelete = useCallback(
-    async (id: string) => {
-      await api.deleteMeal(id);
-      await load(date);
+  // Each month result's data object is stable (same reference) until data
+  // actually changes, so using them as deps gives correct memoisation.
+  const m0 = monthResults[0]?.data;
+  const m1 = monthResults[1]?.data;
+  const weekStatus = useMemo(() => {
+    const map = new Map<string, { status: DayStatus; kcal: number }>();
+    for (const monthData of [m0, m1]) {
+      if (monthData) {
+        for (const d of monthData.days) map.set(d.date, d);
+      }
+    }
+    return map;
+  }, [m0, m1]);
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => api.deleteMeal(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["day", date] });
+      void queryClient.invalidateQueries({ queryKey: ["month"] });
     },
-    [date, load],
-  );
+  });
+
+  const saveMealMutation = useMutation({
+    mutationFn: (args: { mealType: MealType; items: BulkAddItem[] }) =>
+      api.bulkAddMeal({ meal_type: args.mealType, items: args.items }),
+    onSuccess: (_, { items }) => {
+      void queryClient.invalidateQueries({ queryKey: ["day", date] });
+      void queryClient.invalidateQueries({ queryKey: ["month"] });
+      void queryClient.invalidateQueries({ queryKey: ["foods"] });
+      setToast(`✅ ${items.length} позиц. записаны`);
+      setPendingItems([]);
+      setMealPickerOpen(false);
+      setTimeout(() => setToast(null), 2400);
+    },
+    onError: (e) => {
+      setToast(`⚠️ ${(e as Error).message}`);
+      setTimeout(() => setToast(null), 2400);
+    },
+  });
 
   const today = todayISO();
 
-  // Photo-resolved items from FabActionSheet → open meal-type picker.
-  const handlePhotoResolved = useCallback((items: ResolvedItem[]) => {
+  const handlePhotoResolved = (items: ResolvedItem[]) => {
     setPendingItems(
       items.map((it) => ({
         food_name: it.food_name,
@@ -130,12 +126,9 @@ export function Dashboard({ date, onDateChange }: Props) {
     );
     setActionSheetOpen(false);
     setMealPickerOpen(true);
-  }, []);
+  };
 
-  // Newly-created custom food from FAB → seed pending basket with 1 item
-  // and jump to meal-type picker (no extra weight-edit step — the user just
-  // entered the per-portion macros).
-  const handleProductCreated = useCallback((food: QuickAddFoodOut) => {
+  const handleProductCreated = (food: QuickAddFoodOut) => {
     setPendingItems([
       {
         food_name: food.food_name,
@@ -151,27 +144,12 @@ export function Dashboard({ date, onDateChange }: Props) {
     ]);
     setFoodFormOpen(false);
     setMealPickerOpen(true);
-  }, []);
+  };
 
-  const handleSaveMeal = useCallback(
-    async (mealType: MealType) => {
-      if (savingMeal || pendingItems.length === 0) return;
-      setSavingMeal(true);
-      try {
-        await api.bulkAddMeal({ meal_type: mealType, items: pendingItems });
-        setToast(`✅ ${pendingItems.length} позиц. записаны`);
-        setPendingItems([]);
-        setMealPickerOpen(false);
-        await load(date);
-      } catch (e) {
-        setToast(`⚠️ ${(e as Error).message}`);
-      } finally {
-        setSavingMeal(false);
-        setTimeout(() => setToast(null), 2400);
-      }
-    },
-    [savingMeal, pendingItems, load, date],
-  );
+  const handleSaveMeal = (mealType: MealType) => {
+    if (saveMealMutation.isPending || pendingItems.length === 0) return;
+    saveMealMutation.mutate({ mealType, items: pendingItems });
+  };
 
   return (
     <div className="mx-auto max-w-md px-4 pb-32 pt-16">
@@ -180,8 +158,7 @@ export function Dashboard({ date, onDateChange }: Props) {
         {humanDate(date)}
       </div>
 
-      {/* Week strip — 7 cells Mon→Sun coloured by daily fill status,
-          mirroring the legend on the Calendar page. */}
+      {/* Week strip — 7 cells Mon→Sun coloured by daily fill status. */}
       <div className="mb-4 grid grid-cols-7 gap-1.5">
         {week.map((iso, i) => {
           const day = weekStatus.get(iso);
@@ -193,7 +170,9 @@ export function Dashboard({ date, onDateChange }: Props) {
           return (
             <button
               key={iso}
-              onClick={() => onDateChange(iso)}
+              onClick={() =>
+                void navigate({ to: "/dashboard", search: { date: iso } })
+              }
               disabled={isFuture}
               aria-label={`${WEEKDAYS[i]} ${dayNum}`}
               aria-current={isSelected ? "date" : undefined}
@@ -216,7 +195,7 @@ export function Dashboard({ date, onDateChange }: Props) {
         })}
       </div>
 
-      {loading && !data ? (
+      {isLoading && !data ? (
         <div className="py-20 text-center text-tg-hint">Загрузка…</div>
       ) : data ? (
         <>
@@ -256,20 +235,21 @@ export function Dashboard({ date, onDateChange }: Props) {
               </div>
             ) : (
               data.meals.map((m) => (
-                <MealCard key={m.id} meal={m} onDelete={handleDelete} />
+                <MealCard
+                  key={m.id}
+                  meal={m}
+                  onDelete={(id) => deleteMutation.mutate(id)}
+                />
               ))
             )}
           </div>
         </>
       ) : null}
 
-      {/* FAB — sits above the liquid-glass nav (z-50) but below modals.
-          Wrapped in a centered max-w-md column so it aligns with content
-          right-edge on wide viewports instead of flying to the screen edge. */}
+      {/* FAB — sits above the liquid-glass nav. */}
       <div
         className="pointer-events-none fixed inset-x-0 z-40"
         style={{
-          // Park above the nav pill (nav has 12px safe-area padding + ~62px height).
           bottom: "calc(env(safe-area-inset-bottom, 0px) + 88px)",
         }}
       >
@@ -313,7 +293,7 @@ export function Dashboard({ date, onDateChange }: Props) {
         open={mealPickerOpen}
         onPick={handleSaveMeal}
         onClose={() => setMealPickerOpen(false)}
-        saving={savingMeal}
+        saving={saveMealMutation.isPending}
         count={pendingItems.length}
         kcal={pendingItems.reduce((s, it) => s + it.kcal, 0)}
       />
