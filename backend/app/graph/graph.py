@@ -19,6 +19,10 @@ Graph (Variant B — thin LangGraph, see docs/ARCHITECTURE_VARIANTS.md):
       ├──[text]── guiderail (same as voice path)
       └──[unknown]── reject ── END
 
+    parse_text ── ok → nutrition_lookup
+              └── any item without weight → ask_weight ── END
+                  (bot reprompts user "сколько граммов риса?" — no draft state)
+
     nutrition_lookup ──┐
                        ├── nothing resolved → error
                        └── ok               → reflect
@@ -42,6 +46,7 @@ from functools import lru_cache
 
 from langgraph.graph import END, START, StateGraph
 
+from app.graph.nodes.ask_weight import ask_weight_node
 from app.graph.nodes.error import error_node
 from app.graph.nodes.finalize import finalize_node, reject_node
 from app.graph.nodes.guiderail import guiderail_node
@@ -84,9 +89,14 @@ def _route_after_guiderail(state: GraphState) -> str:
 def _route_after_parse(state: GraphState) -> str:
     if state.get("error"):
         return "error"
-    if not state.get("parsed_items"):
+    items = state.get("parsed_items") or []
+    if not items:
         state["error"] = "nothing parsed"
         return "error"
+    # If the user wrote a noun without a weight ("рис"), the parser flagged it
+    # — ask the user to retype with grams instead of guessing at a portion.
+    if any(not getattr(i, "weight_provided", True) for i in items):
+        return "ask_weight"
     return "nutrition_lookup"
 
 
@@ -113,6 +123,7 @@ def build_meal_graph():
     graph.add_node("transcribe_voice", transcribe_voice_node)
     graph.add_node("guiderail", guiderail_node)
     graph.add_node("parse_text", parse_text_node)
+    graph.add_node("ask_weight", ask_weight_node)
     graph.add_node("nutrition_lookup", nutrition_fetch_node)
     graph.add_node("reflect", reflect_node)
     graph.add_node("finalize", finalize_node)
@@ -161,12 +172,13 @@ def build_meal_graph():
         },
     )
 
-    # Parser → lookup or error.
+    # Parser → lookup, ask_weight (any item without weight) or error.
     graph.add_conditional_edges(
         "parse_text",
         _route_after_parse,
         {
             "nutrition_lookup": "nutrition_lookup",
+            "ask_weight": "ask_weight",
             "error": "error",
         },
     )
@@ -195,6 +207,7 @@ def build_meal_graph():
     graph.add_edge("finalize", END)
     graph.add_edge("error", END)
     graph.add_edge("reject", END)
+    graph.add_edge("ask_weight", END)
 
     return graph.compile()
 

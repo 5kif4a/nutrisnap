@@ -39,6 +39,15 @@ class ParsedFoodItem(BaseModel):
         default=None, description="EAN/UPC barcode if visible on packaging"
     )
     confidence: float = Field(default=0.7, ge=0.0, le=1.0)
+    weight_provided: bool = Field(
+        default=True,
+        description=(
+            "False ONLY when the user did NOT write any number/weight for this item "
+            "and you fell back to amount=1 with unit=serving/piece. When the user "
+            "explicitly wrote any number (grams, pieces, ml, 'стакан', 'бутылка', "
+            "'порция') — set True. Photos always have an estimated amount → True."
+        ),
+    )
 
 
 class PhotoMealResult(BaseModel):
@@ -162,11 +171,35 @@ RULES
 6. PRESERVE the user's wording inside `name` — keep declension as-is
    ("улитки" stays "улитки", "улитка" stays "улитка"); only fix obvious typos.
 7. Supplements ARE food: whey, casein, creatine, protein bars, gainers.
+8. WEIGHT_PROVIDED — set False ONLY when the user wrote NO number at all for
+   the item and you fall back to amount=1, unit=serving. If any number is
+   present (grams, pieces, ml, "стакан", "бутылка", "порция") → True. The
+   bot will reprompt the user for the missing weight when this is False.
+9. NAME NORMALIZATION for bare nouns — when the user writes ONLY a generic
+   noun without any cooking descriptor, expand `name` to the typical
+   diary-logging form so external lookup (Open Food Facts) gets a clean
+   hit instead of random matches. Keep the user's number/weight as-is.
+     - Grains/cereals (рис, гречка, овсянка, перловка, булгур, киноа,
+       манка, пшено) → "<crop> отварной/отварная" (gender by Russian rule)
+     - Pasta (макароны, спагетти, паста) → "<x> отварные/-ая"
+     - Plain meat (курица, говядина, индейка, свинина, рыба) → "<x> отварная"
+     - Tubers (картофель, картошка) → "Картофель отварной"
+     - Legumes (фасоль, чечевица, нут, горох) → "<x> отварная/-ой"
+   IMPORTANT: only when no other descriptor is present. "Жареная курица 200",
+   "рис на пару 150", "Гречка с грибами 200" — leave as-is.
 
 FEW-SHOTS (real user patterns — match these exactly)
 
 "Хлеб 53"                       → [{name:"Хлеб", amount:53, unit:g}]
+"Рис 150"                       → [{name:"Рис отварной", amount:150, unit:g}]
+"гречка 100"                    → [{name:"Гречка отварная", amount:100, unit:g}]
+"курица 200"                    → [{name:"Курица отварная", amount:200, unit:g}]
+"Овсянка 80"                    → [{name:"Овсянка отварная", amount:80, unit:g}]
+"макароны 90"                   → [{name:"Макароны отварные", amount:90, unit:g}]
+"картошка 200"                  → [{name:"Картофель отварной", amount:200, unit:g}]
 "Курица с овощами 95"           → [{name:"Курица с овощами", amount:95, unit:g}]
+"Жареная курица 180"            → [{name:"Жареная курица", amount:180, unit:g}]
+"Рис на пару 120"               → [{name:"Рис на пару", amount:120, unit:g}]
 "Фасоль бондюэль 25"            → [{name:"Фасоль", brand:"Bonduelle", amount:25, unit:g}]
 "Макароны Макфа улитка 92"      → [{name:"Макароны улитка", brand:"Makfa", amount:92, unit:g}]
 "50 гр макароны улитки макфа"   → [{name:"Макароны улитки", brand:"Makfa", amount:50, unit:g}]
@@ -190,6 +223,11 @@ EDGE CASES
                                    {name:"Гречка", amount:150, unit:g}]
 "стакан молока"                 → [{name:"Молоко", amount:250, unit:ml}]
 "съел 2 яйца"                   → [{name:"Яйцо", amount:2, unit:piece}]
+"рис"                           → [{name:"Рис", amount:1, unit:serving, weight_provided:false}]
+"гречка и курица"               → [{name:"Гречка", amount:1, unit:serving, weight_provided:false},
+                                   {name:"Курица", amount:1, unit:serving, weight_provided:false}]
+"200г курицы и рис"             → [{name:"Курица", amount:200, unit:g},
+                                   {name:"Рис", amount:1, unit:serving, weight_provided:false}]
 
 If nothing parses, return items=[].
 """
