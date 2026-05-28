@@ -182,8 +182,8 @@ RULES
    bot will reprompt the user for the missing weight when this is False.
 9. NAME NORMALIZATION for bare nouns — when the user writes ONLY a generic
    noun without any cooking descriptor, expand `name` to the typical
-   diary-logging form so external lookup (FatSecret) gets a clean
-   hit instead of random matches. Keep the user's number/weight as-is.
+   diary-logging form so catalog / LLM lookup gets a clean hit instead of
+   random matches. Keep the user's number/weight as-is.
      - Grains/cereals (рис, гречка, овсянка, перловка, булгур, киноа,
        манка, пшено) → "<crop> отварной/отварная" (gender by Russian rule)
      - Pasta (макароны, спагетти, паста) → "<x> отварные/-ая"
@@ -241,7 +241,7 @@ If nothing parses, return items=[].
 # ─── Public callables ────────────────────────────────────────────────────────
 
 
-@traceable(name="analyze_photo_meal", run_type="llm")
+@traceable(name="analyze_photo_meal", run_type="chain")
 async def analyze_photo_meal(
     images: bytes | list[bytes],
     *,
@@ -300,7 +300,7 @@ async def analyze_photo_meal(
     return parsed
 
 
-@traceable(name="parse_text_meal", run_type="llm")
+@traceable(name="parse_text_meal", run_type="chain")
 async def parse_text_meal(text: str) -> TextParseResult:
     """Parse free-form user text into structured food items.
 
@@ -368,7 +368,7 @@ For composite dishes (плов, борщ, лагман) — use an averaged reci
 """
 
 
-@traceable(name="estimate_nutrition", run_type="llm")
+@traceable(name="estimate_nutrition", run_type="chain")
 async def estimate_nutrition(food_name: str) -> NutritionEstimate:
     """Last-resort fallback: ask LLM for typical KBJU when no external source matched."""
     client = get_openai_client()
@@ -396,7 +396,7 @@ async def estimate_nutrition(food_name: str) -> NutritionEstimate:
     return parsed
 
 
-@traceable(name="transcribe_voice", run_type="llm")
+@traceable(name="transcribe_voice", run_type="chain")
 async def transcribe_voice(audio_bytes: bytes, *, filename: str = "voice.ogg") -> str:
     """Transcribe a Telegram voice note via Whisper."""
     client = get_openai_client()
@@ -460,7 +460,7 @@ When category != "food", is_food_intent=FALSE. Return only the structured result
 """
 
 
-@traceable(name="classify_food_intent", run_type="llm")
+@traceable(name="classify_food_intent", run_type="chain")
 async def classify_food_intent(text: str) -> FoodIntentResult:
     """Single-shot LLM gate: decide if the user message is about food."""
     client = get_openai_client()
@@ -482,7 +482,7 @@ async def classify_food_intent(text: str) -> FoodIntentResult:
     return parsed
 
 
-@traceable(name="moderate_text", run_type="llm")
+@traceable(name="moderate_text", run_type="chain")
 async def moderate_text(text: str) -> bool:
     """OpenAI Moderation API — True when the input is flagged for abuse / harm.
 

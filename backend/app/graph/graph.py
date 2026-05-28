@@ -36,8 +36,8 @@ returns `is_food_image`/`is_safe_image` in its structured schema.
 
 `reflect` checks resolved items for hallucinations (Atwater + fuzzy
 name-match + vision scene cross-check). On the first failure it loops back
-to `nutrition_lookup` with `reflect_strict=True` (skip OFF/FatSecret text
-search). On the second failure it routes to `error`.
+to `nutrition_lookup` with `reflect_strict=True` (reserved for future
+external-source gating). On the second failure it routes to `error`.
 """
 
 from __future__ import annotations

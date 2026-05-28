@@ -8,9 +8,9 @@ ready to drop into a MealItem. The atomic tools (`lookup_food`,
 the MCP server for external clients and unit tests, but the graph itself
 makes one round-trip per item instead of three.
 
-`reflect_strict` is propagated to the MCP tool so the reflect-retry loop can
-ask the server to skip fuzzy text matches (FatSecret) — barcode + local PG +
-LLM estimate still run.
+`reflect_strict` is propagated to the MCP tool but currently a no-op — kept
+on the signature for the future when fuzzy external search returns and the
+reflect-retry loop needs a way to disable it.
 """
 
 from __future__ import annotations

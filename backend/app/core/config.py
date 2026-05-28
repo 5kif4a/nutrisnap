@@ -38,16 +38,6 @@ class Settings(BaseSettings):
     LANGCHAIN_API_KEY: str | None = None
     LANGCHAIN_PROJECT: str = "nutrisnap"
 
-    # FatSecret (optional fallback). Basic tier requires IP whitelist — point
-    # FATSECRET_PROXY_URL at a static-IP proxy (e.g. Fixie / QuotaGuard) whose
-    # outbound IP is whitelisted in the FatSecret developer console. Without
-    # the proxy, requests from Railway's rotating IPs will be rejected.
-    # Currently disabled by default — flip FATSECRET_ENABLED=true to re-enable.
-    FATSECRET_ENABLED: bool = False
-    FATSECRET_CLIENT_ID: str | None = None
-    FATSECRET_CLIENT_SECRET: str | None = None
-    FATSECRET_PROXY_URL: str | None = None
-
     @field_validator("DATABASE_URL", mode="before")
     @classmethod
     def force_asyncpg_scheme(cls, value: str) -> str:

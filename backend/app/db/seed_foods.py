@@ -1,8 +1,8 @@
 """Seed `foods` table with the user's most frequently eaten products.
 
-Source of nutrition values: foods.fatsecret.com export
-(see docs/golden/food_diary.md). Per-100g (or per-100ml) values
-recomputed from the report's portion-level entries.
+Source of nutrition values: hand-curated from the team's food-diary export
+(see docs/golden/food_diary.md). Per-100g (or per-100ml) values recomputed
+from the report's portion-level entries.
 
 Aliases capture the messy way users type product names: lowercase brands,
 cyrillic-transliterated brands (Bonduelle → бондюэль), brand-first vs

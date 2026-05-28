@@ -22,7 +22,7 @@ from app.rag.qdrant import schedule_food_indexing
 
 @dataclass(slots=True)
 class ExternalFoodPayload:
-    """Normalized food info from any external source (OFF, FatSecret, Vision)."""
+    """Normalized food info from any external source (OFF, Vision, recipe)."""
 
     name: str
     metric: FoodMetric
@@ -62,13 +62,13 @@ async def search_foods_by_name(
     """Search local catalog by name OR aliases. Case-insensitive.
 
     Results are ordered by source trust — curated (hand-verified) wins over
-    FatSecret / LLM-estimate which historically have produced noisy text hits.
+    OFF / LLM-estimate which can carry stale or noisy text hits.
     """
     pattern = f"%{query.strip()}%"
     source_priority = case(
         (Food.source == FoodSource.CURATED, 0),
         (Food.source == FoodSource.USER_RECIPE, 1),
-        (Food.source == FoodSource.FATSECRET, 2),
+        (Food.source == FoodSource.OPEN_FOOD_FACTS, 2),
         (Food.source == FoodSource.CUSTOM, 3),
         (Food.source == FoodSource.LLM_ESTIMATE, 4),
         else_=99,

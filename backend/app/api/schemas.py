@@ -210,7 +210,7 @@ class QuickAddRequest(BaseModel):
 
     For multi-item quick-add the client should call this once per item OR
     use the future /api/meals/bulk endpoint. Keeping it single for now to
-    match the FatSecret-style 'tap to log' UX.
+    match the 'tap to log' UX of stock diary apps.
     """
 
     food_name: str

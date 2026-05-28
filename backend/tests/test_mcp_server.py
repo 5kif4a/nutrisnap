@@ -1,9 +1,9 @@
 """Unit tests for the Nutrition MCP server tools and their core logic.
 
 No DB / network: the source-resolution chain's dependencies are monkeypatched
-and the compute tool is pure. Covers tool registration, source-priority order,
-brand/strict modes, the FATSECRET_ENABLED gate, the LLM-estimate refusal
-policy (branded + Atwater plausibility), and portion math.
+and the compute tool is pure. Covers tool registration, the local-catalog
+resolution chain, the LLM-estimate refusal policy (branded + Atwater
+plausibility), and portion math.
 """
 
 from __future__ import annotations
@@ -145,23 +145,11 @@ def _stub_chain(monkeypatch, **overrides):
     async def empty_local(_s, _n, limit=1):
         return []
 
-    async def empty_fs(_query, limit=1):
-        return []
-
-    async def passthrough_upsert(_s, p):
-        return p
-
     monkeypatch.setattr(
         srv, "lookup_food_by_barcode", overrides.get("lookup_food_by_barcode", none_bc)
     )
     monkeypatch.setattr(
         srv, "search_foods_by_name", overrides.get("search_foods_by_name", empty_local)
-    )
-    monkeypatch.setattr(
-        srv.fs, "search_foods_by_text", overrides.get("fs_text", empty_fs)
-    )
-    monkeypatch.setattr(
-        srv, "upsert_food_from_external", overrides.get("upsert", passthrough_upsert)
     )
 
 
@@ -178,60 +166,30 @@ async def test_resolve_food_local_barcode_short_circuits(monkeypatch):
         monkeypatch,
         lookup_food_by_barcode=fake_barcode,
         search_foods_by_name=fail,
-        fs_text=fail,
     )
 
     out = await srv.resolve_food(object(), "milk", "123")
     assert out is local
 
 
-async def test_resolve_food_strict_mode_skips_fs(monkeypatch, settings_override):
-    settings_override(FATSECRET_ENABLED=True)
-
-    async def fail_text(*_a, **_k):
-        raise AssertionError("strict mode must NOT call fuzzy text search")
-
-    _stub_chain(monkeypatch, fs_text=fail_text)
-
-    out = await srv.resolve_food(
-        object(), "куриная грудка", None, brand="Maxler", strict=True
-    )
-    assert out is None  # nothing matched and text-search paths skipped
-
-
-async def test_resolve_food_skips_fatsecret_when_disabled(
-    monkeypatch, settings_override
-):
-    settings_override(FATSECRET_ENABLED=False)
-
-    async def fail_fs(*_a, **_k):
-        raise AssertionError("FatSecret must NOT run when disabled")
-
-    _stub_chain(monkeypatch, fs_text=fail_fs)
-
+async def test_resolve_food_falls_through_to_name_then_none(monkeypatch):
+    """No barcode hit and no name hit → None (caller falls back to LLM estimate)."""
+    _stub_chain(monkeypatch)
     out = await srv.resolve_food(object(), "редкий продукт", None)
-    assert out is None  # chain ran cleanly, FS was skipped
+    assert out is None
 
 
-async def test_resolve_food_calls_fatsecret_with_brand_when_enabled(
-    monkeypatch, settings_override
-):
-    settings_override(FATSECRET_ENABLED=True)
-    cached = _fake_food(name="from FS")
-    seen: dict = {}
+async def test_resolve_food_strict_is_currently_a_noop(monkeypatch):
+    """`strict` is reserved for future external-source gating; today it must
+    not break the local-catalog path."""
+    local = _fake_food(name="local")
 
-    async def fs_text(query, limit=1):
-        seen["query"] = query
-        return [object()]
+    async def name_hit(_s, _n, limit=1):
+        return [local]
 
-    async def upsert(_s, _p):
-        return cached
-
-    _stub_chain(monkeypatch, fs_text=fs_text, upsert=upsert)
-
-    out = await srv.resolve_food(object(), "Ultra Whey", None, brand="Maxler")
-    assert out is cached
-    assert seen["query"] == "Maxler Ultra Whey"
+    _stub_chain(monkeypatch, search_foods_by_name=name_hit)
+    out = await srv.resolve_food(object(), "milk", None, brand="X", strict=True)
+    assert out is local
 
 
 # ─── estimate_food_nutrition tool ─────────────────────────────────────────────
@@ -273,15 +231,3 @@ async def test_estimate_tool_rejects_implausible_macros(monkeypatch):
     assert "implausible" in (res.reason or "")
 
 
-# ─── Fixtures ────────────────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def settings_override(monkeypatch):
-    """Temporarily override `app.core.config.settings` attributes."""
-
-    def _set(**kwargs):
-        for k, v in kwargs.items():
-            monkeypatch.setattr(srv.settings, k, v)
-
-    return _set

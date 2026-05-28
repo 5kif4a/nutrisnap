@@ -6,7 +6,7 @@ four tools. The LangGraph `nutrition_fetch_node` is the in-app MCP client (see
 MCP Inspector.
 
     resolve_meal_item            — composite: lookup → estimate → portion math
-    lookup_food                  — local cache → FatSecret chain (+ upsert)
+    lookup_food                  — local PG catalog by barcode then name/alias
     compute_meal_item_nutrition  — scale per-100g/piece macros to a portion
     estimate_food_nutrition      — gpt-4o-mini last-resort KBJU estimate
 
@@ -25,15 +25,12 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.db.models import Food, FoodMetric, FoodSource
 from app.db.session import async_session_factory
 from app.repositories.food_repo import (
     lookup_food_by_barcode,
     search_foods_by_name,
-    upsert_food_from_external,
 )
-from app.services import fatsecret as fs
 from app.services.nutrition_calc import (
     compute_meal_item_nutrition as calc_item_nutrition,
 )
@@ -116,17 +113,17 @@ async def resolve_food(
     brand: str | None = None,
     strict: bool = False,
 ) -> Food | None:
-    """Try sources in priority order; cache external hits into local PG.
+    """Try sources in priority order. See `docs/NUTRITION_LOOKUP.md`.
 
-    Mirrors `docs/NUTRITION_LOOKUP.md`. The LLM estimate is intentionally NOT
-    here — it lives in `estimate_food_nutrition` so the client can decide when
-    to fall back without persisting hallucinations.
+    The LLM estimate is intentionally NOT here — it lives in
+    `estimate_food_nutrition` so the client can decide when to fall back
+    without persisting hallucinations.
 
-    In `strict` mode (used by the reflect-retry loop) we skip the fuzzy
-    FatSecret text search — that's the step that produces the worst
-    hallucinations ("Nuts 66" → some random nut-butter row). Barcode lookups
-    always stay (ground truth).
+    `strict` (set by the reflect-retry loop) is a no-op for now — only kept
+    on the signature for the future when fuzzy external search returns.
     """
+    del brand, strict  # accepted for forward-compat; not used by current chain
+
     # 1) Local cache by barcode
     if barcode:
         hit = await lookup_food_by_barcode(session, barcode)
@@ -137,17 +134,6 @@ async def resolve_food(
     local_hits = await search_foods_by_name(session, name, limit=1)
     if local_hits:
         return local_hits[0]
-
-    if not strict:
-        # 3) FatSecret text search — gated by `settings.FATSECRET_ENABLED` so it
-        #    stays in the codebase as a fallback we can flip on without
-        #    re-plumbing the chain. `is_fatsecret_configured()` is the second
-        #    gate; together they keep the chain valid in dev with no creds.
-        if settings.FATSECRET_ENABLED:
-            fs_query = f"{brand} {name}" if brand else name
-            fs_results = await fs.search_foods_by_text(fs_query, limit=1)
-            if fs_results:
-                return await upsert_food_from_external(session, fs_results[0])
 
     return None
 
@@ -239,8 +225,8 @@ async def resolve_meal_item(
 ) -> MealItemResolution:
     """Resolve a parsed item to absolute KBJU in one call.
 
-    Pipeline: local PG (barcode then name) → FatSecret (when enabled and
-    `strict=False`) → generic LLM estimate (brand dropped) → portion math.
+    Pipeline: local PG (barcode then name/alias) → generic LLM estimate
+    (brand dropped) → portion math.
 
     Unlike the atomic `estimate_food_nutrition`, the LLM fallback here does
     NOT refuse branded items — it strips the brand and estimates the generic
@@ -320,15 +306,14 @@ async def lookup_food(
     brand: str | None = None,
     strict: bool = False,
 ) -> FoodLookupResult:
-    """Resolve a food's per-unit nutrition from the catalog or external sources.
+    """Resolve a food's per-unit nutrition from the local catalog.
 
-    Order: local PG cache (barcode then name/alias) → FatSecret text search
-    (when `FATSECRET_ENABLED`). External hits are cached back into the catalog.
-    Returns `found=False` when no source matches — call `estimate_food_nutrition`
+    Order: local PG cache by barcode → local PG cache by name / alias / brand.
+    Returns `found=False` when nothing matches — call `estimate_food_nutrition`
     as the last resort.
 
-    `strict=True` (used by the reflect-retry loop) skips the fuzzy FatSecret
-    text search to avoid repeating the same bad branded match.
+    `strict=True` is a no-op for now; it stayed on the signature for the
+    reflect-retry loop, which used to disable fuzzy external search.
     """
     async with async_session_factory() as session:
         food = await resolve_food(session, name, barcode, brand=brand, strict=strict)

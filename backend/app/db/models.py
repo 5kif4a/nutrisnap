@@ -54,7 +54,7 @@ class InputSource(StrEnum):
 
 class FoodSource(StrEnum):
     CURATED = "curated"  # hand-seeded by team (regional cuisines, popular dishes)
-    FATSECRET = "fatsecret"  # FatSecret API
+    OPEN_FOOD_FACTS = "open_food_facts"  # ingested from OFF (barcode lookup or dump)
     CUSTOM = "custom"  # user-generated (UGC)
     USER_RECIPE = "user_recipe"  # cooked dish saved by user via recipe-builder flow
     LLM_ESTIMATE = "llm_estimate"  # GPT-mini fallback estimate
@@ -197,7 +197,7 @@ class Food(UuidPkMixin, TimestampsMixin, Base):
     # when the user says "200г яиц" or shows photo of half a portion.
     piece_weight_g: Mapped[float | None] = mapped_column()
 
-    # Alternative servings (FatSecret-style), JSONB array:
+    # Alternative servings (tablespoon / cup / package), JSONB array:
     # [{"label": "1 ст.л.", "amount": 15, "unit": "g"},
     #  {"label": "1 стакан", "amount": 250, "unit": "ml"}]
     servings: Mapped[list[dict]] = mapped_column(
