@@ -27,13 +27,12 @@
 - ⚡ **Quick Add** под подтверждением приёма: одной кнопкой докинуть в текущий черновик частый продукт юзера на этот тип приёма
 
 ### Поиск продуктов (multi-source)
-1. Локальный кэш PostgreSQL с `ORDER BY source_priority` (`curated > user_recipe > off > llm_estimate`)
+1. Локальный кэш PostgreSQL с `ORDER BY source_priority` (`curated > user_recipe > fatsecret > llm_estimate`)
 2. Qdrant RAG (semantic search по name + brand + cuisine + aliases)
-3. Open Food Facts (по штрих-коду и текстовый поиск)
-4. FatSecret API (fallback для редких EN-only продуктов, требует static IP proxy)
-5. GPT-4o-mini estimate — **ephemeral**, не загрязняет каталог
+3. FatSecret API (fallback для редких EN-only продуктов, требует static IP proxy)
+4. GPT-4o-mini estimate — **ephemeral**, не загрязняет каталог
 
-Любой новый Food (из OFF / user-recipe) автоматически embed'ится в Qdrant fire-and-forget хуком — recommender видит каталог в реальном времени.
+Любой новый Food (из FatSecret / user-recipe) автоматически embed'ится в Qdrant fire-and-forget хуком — recommender видит каталог в реальном времени.
 
 ### Дневник и аналитика
 - Дашборд с кольцевым прогресс-баром калорий и БЖУ
@@ -110,7 +109,6 @@ flowchart LR
     mcp[🔧 MCP Nutrition Server]
     pg[(PostgreSQL)]
     qdrant[(Qdrant<br/>RAG)]
-    off[Open Food Facts]
     fs[FatSecret]
     langsmith[LangSmith Trace]
 
@@ -125,7 +123,6 @@ flowchart LR
     langgraph --> mcp
     mcp --> pg
     mcp --> qdrant
-    mcp --> off
     mcp -.fallback.-> fs
     langgraph -.traces.-> langsmith
 ```
@@ -151,7 +148,7 @@ sequenceDiagram
         G->>M: search_food
         M->>D: PG cache
         M->>M: Qdrant RAG
-        M->>M: OFF API
+        M->>M: FatSecret
     end
     M-->>G: nutrition data
     G-->>B: confirmation + inline keyboard
@@ -373,7 +370,7 @@ docker compose -f docker-compose.dev.yml exec api python -m app.evals.run > /tmp
 | MCP-сервер с 2+ tools | ⏳ | `backend/app/mcp/` (планируется) |
 | Skill с SKILL.md | ⏳ | планируется (KZ-блюда skill) |
 | RAG-пайплайн | ✅ | `backend/app/rag/` (Qdrant + auto-index hook) |
-| Обработка документов / скрапинг | ✅ | OFF API + FatSecret + кураторский seed |
+| Обработка документов / скрапинг | ✅ | FatSecret + кураторский seed |
 | Мультимодальность | ✅ | GPT-4o Vision (фото + штрих-код + весы) + Whisper |
 | LangSmith трейсинг | ✅ | через `@traceable`/`langsmith` env-vars |
 | Golden dataset 30+ примеров + 2 метрики | ✅ | `backend/app/evals/golden.jsonl` (44 кейса), pass rate + MAPE |

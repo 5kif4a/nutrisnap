@@ -144,9 +144,6 @@ def _stub_chain(monkeypatch, **overrides):
     async def empty_local(_s, _n, limit=1):
         return []
 
-    async def empty_off_text(_name, *, brand=None, limit=1):
-        return []
-
     async def empty_fs(_query, limit=1):
         return []
 
@@ -158,12 +155,6 @@ def _stub_chain(monkeypatch, **overrides):
     )
     monkeypatch.setattr(
         srv, "search_foods_by_name", overrides.get("search_foods_by_name", empty_local)
-    )
-    monkeypatch.setattr(
-        srv.off, "lookup_food_by_barcode", overrides.get("off_barcode", none_bc)
-    )
-    monkeypatch.setattr(
-        srv.off, "search_foods_by_text", overrides.get("off_text", empty_off_text)
     )
     monkeypatch.setattr(
         srv.fs, "search_foods_by_text", overrides.get("fs_text", empty_fs)
@@ -186,8 +177,6 @@ async def test_resolve_food_local_barcode_short_circuits(monkeypatch):
         monkeypatch,
         lookup_food_by_barcode=fake_barcode,
         search_foods_by_name=fail,
-        off_barcode=fail,
-        off_text=fail,
         fs_text=fail,
     )
 
@@ -195,34 +184,13 @@ async def test_resolve_food_local_barcode_short_circuits(monkeypatch):
     assert out is local
 
 
-async def test_resolve_food_passes_brand_to_off_text(monkeypatch):
-    cached = _fake_food(name="Snickers from OFF")
-    seen: dict = {}
-
-    async def off_text(name, *, brand=None, limit=1):
-        seen["name"] = name
-        seen["brand"] = brand
-        return [object()]
-
-    async def upsert(_s, _p):
-        return cached
-
-    _stub_chain(monkeypatch, off_text=off_text, upsert=upsert)
-
-    out = await srv.resolve_food(object(), "шоколадка", None, brand="Snickers")
-    assert out is cached
-    assert seen == {"name": "шоколадка", "brand": "Snickers"}
-
-
-async def test_resolve_food_strict_mode_skips_off_text_and_fs(
-    monkeypatch, settings_override
-):
+async def test_resolve_food_strict_mode_skips_fs(monkeypatch, settings_override):
     settings_override(FATSECRET_ENABLED=True)
 
     async def fail_text(*_a, **_k):
         raise AssertionError("strict mode must NOT call fuzzy text search")
 
-    _stub_chain(monkeypatch, off_text=fail_text, fs_text=fail_text)
+    _stub_chain(monkeypatch, fs_text=fail_text)
 
     out = await srv.resolve_food(
         object(), "куриная грудка", None, brand="Maxler", strict=True

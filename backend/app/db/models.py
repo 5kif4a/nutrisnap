@@ -54,7 +54,6 @@ class InputSource(StrEnum):
 
 class FoodSource(StrEnum):
     CURATED = "curated"  # hand-seeded by team (regional cuisines, popular dishes)
-    OPEN_FOOD_FACTS = "off"  # OFF API (barcode / text)
     FATSECRET = "fatsecret"  # FatSecret API
     CUSTOM = "custom"  # user-generated (UGC)
     USER_RECIPE = "user_recipe"  # cooked dish saved by user via recipe-builder flow

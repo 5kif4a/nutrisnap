@@ -38,7 +38,7 @@ nutrisnap/
 │   │   ├── graph/             # LangGraph граф и ноды
 │   │   ├── mcp/               # MCP nutrition server
 │   │   ├── rag/               # Qdrant ingest и retrieval
-│   │   ├── services/          # OpenFoodFacts, FatSecret, бизнес-логика
+│   │   ├── services/          # FatSecret, бизнес-логика
 │   │   └── evals/             # golden dataset + run.py
 │   ├── tests/
 │   ├── alembic/               # миграции (будут добавлены)
@@ -85,11 +85,12 @@ nutrisnap/
 ```
 1. PostgreSQL local cache       (~80% после прогрева)
 2. Qdrant RAG (curated regional + raw foods seed)
-3. Open Food Facts (barcode)    ← главное для упаковок (President, Coca-Cola)
-4. Open Food Facts (text)
-5. FatSecret API                ← fallback для редких EN-only продуктов
-6. GPT-4o-mini estimate         ← last resort
+3. FatSecret API                ← fallback для редких EN-only продуктов
+4. GPT-4o-mini estimate         ← last resort
 ```
+
+> Open Food Facts удалён из пайплайна: публичный API упирался в rate-limit
+> (503). `services/openfoodfacts.py` и `FoodSource.OPEN_FOOD_FACTS` вырезаны.
 
 Каждый успешный внешний lookup → upsert в `foods` с alias'ами. База растёт сама.
 

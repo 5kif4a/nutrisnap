@@ -8,14 +8,14 @@ SDK (`mcp.server.fastmcp.FastMCP`).
 
 | Tool | Input | Output | Wraps |
 |---|---|---|---|
-| `lookup_food` | `name`, `barcode?` | per-unit KBJU + `source` + `food_id` (or `found=false`) | `food_repo` + Open Food Facts + FatSecret chain |
+| `lookup_food` | `name`, `barcode?` | per-unit KBJU + `source` + `food_id` (or `found=false`) | `food_repo` + FatSecret chain |
 | `compute_meal_item_nutrition` | food macros + `metric` + `amount` + `unit` (+ `piece_weight_g?`) | absolute KBJU for the portion (or `ok=false`) | `nutrition_calc.compute_meal_item_nutrition` |
 | `estimate_food_nutrition` | `name` | ephemeral KBJU estimate (`source=llm_estimate`, `food_id=null`) | `openai_client.estimate_nutrition` (gpt-4o-mini) |
 
 `lookup_food` runs the source-priority chain from `docs/NUTRITION_LOOKUP.md`
-(local PG cache → OFF barcode/text → FatSecret) and caches external hits back
-into the catalog. The LLM estimate is a separate tool so the client decides when
-to fall back — estimates are never persisted.
+(local PG cache → FatSecret text search) and caches external hits back into the
+catalog. The LLM estimate is a separate tool so the client decides when to fall
+back — estimates are never persisted.
 
 ## How it's integrated
 

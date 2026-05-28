@@ -1,21 +1,25 @@
 # Nutrition Lookup — пайплайн поиска продуктов
 
+> ⚠️ **Open Food Facts удалён из пайплайна.** Публичный API упирался в rate-limit
+> (503), поэтому шаги "OFF barcode" и "OFF text search" вырезаны из кода
+> (`app/services/openfoodfacts.py` снесён, `FoodSource.OPEN_FOOD_FACTS` удалён).
+> Цепочка теперь: local cache → FatSecret → GPT estimate. Разделы ниже оставлены
+> как исторический контекст.
+
 ## Цель
 
 Найти КБЖУ любого продукта или блюда: от сырых ингредиентов до брендовых упакованных товаров (например "сметана President 10%") и казахских национальных блюд.
 
 ---
 
-## Цепочка приоритетов
+## Цепочка приоритетов (актуальная)
 
 | # | Источник | Покрытие | Цена |
 |---|---|---|---|
 | 1 | PostgreSQL local cache | ~80% после "прогрева" базы | 10ms |
 | 2 | Qdrant RAG (curated regional + raw foods) | западные продукты, семантика | 50ms + embedding |
-| 3 | Open Food Facts (barcode) | бренды, упаковки (President, Coca-Cola) | 200ms |
-| 4 | Open Food Facts (text search) | бренды без штрих-кода | 300ms |
-| 5 | FatSecret API | редкие EN-only продукты | 500ms |
-| 6 | GPT-4o-mini estimate | last resort, "оцени КБЖУ для X" | 1-2s + cost |
+| 3 | FatSecret API | редкие EN-only продукты | 500ms |
+| 4 | GPT-4o-mini estimate | last resort, "оцени КБЖУ для X" | 1-2s + cost |
 
 **Главный принцип:** база растёт сама. Каждый успешный lookup сохраняется в локальный кэш с alias'ами. Через месяц 90% запросов из PostgreSQL.
 

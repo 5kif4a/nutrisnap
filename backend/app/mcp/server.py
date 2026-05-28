@@ -5,7 +5,7 @@ three meaningful tools. The LangGraph `nutrition_fetch_node` is the in-app MCP
 client (see `app.mcp.client`); the same server also runs standalone for Claude
 Desktop / MCP Inspector.
 
-    lookup_food                  — local cache → OFF → FatSecret chain (+ upsert)
+    lookup_food                  — local cache → FatSecret chain (+ upsert)
     compute_meal_item_nutrition  — scale per-100g/piece macros to a portion
     estimate_food_nutrition      — gpt-4o-mini last-resort KBJU estimate
 
@@ -29,7 +29,6 @@ from app.repositories.food_repo import (
     upsert_food_from_external,
 )
 from app.services import fatsecret as fs
-from app.services import openfoodfacts as off
 from app.services.nutrition_calc import (
     compute_meal_item_nutrition as calc_item_nutrition,
 )
@@ -94,15 +93,14 @@ async def resolve_food(
 ) -> Food | None:
     """Try sources in priority order; cache external hits into local PG.
 
-    Mirrors steps 1–5 of `docs/NUTRITION_LOOKUP.md`. The LLM estimate (step 6)
-    is intentionally NOT here — it lives in `estimate_food_nutrition` so the
-    client can decide when to fall back without persisting hallucinations.
+    Mirrors `docs/NUTRITION_LOOKUP.md`. The LLM estimate is intentionally NOT
+    here — it lives in `estimate_food_nutrition` so the client can decide when
+    to fall back without persisting hallucinations.
 
-    `brand` hard-filters Open Food Facts text results (case-insensitive
-    substring on the OFF `brands` field). In `strict` mode (used by the
-    reflect-retry loop) we skip fuzzy text search in OFF and FatSecret — those
-    are the steps that produce the worst hallucinations ("Nuts 66" → some
-    random nut-butter row). Barcode lookups always stay (ground truth).
+    In `strict` mode (used by the reflect-retry loop) we skip the fuzzy
+    FatSecret text search — that's the step that produces the worst
+    hallucinations ("Nuts 66" → some random nut-butter row). Barcode lookups
+    always stay (ground truth).
     """
     # 1) Local cache by barcode
     if barcode:
@@ -115,19 +113,8 @@ async def resolve_food(
     if local_hits:
         return local_hits[0]
 
-    # 3) Open Food Facts by barcode
-    if barcode:
-        off_hit = await off.lookup_food_by_barcode(barcode)
-        if off_hit is not None:
-            return await upsert_food_from_external(session, off_hit)
-
     if not strict:
-        # 4) Open Food Facts text search — pass brand so OFF hard-filters on it
-        off_results = await off.search_foods_by_text(name, brand=brand, limit=1)
-        if off_results:
-            return await upsert_food_from_external(session, off_results[0])
-
-        # 5) FatSecret text search — gated by `settings.FATSECRET_ENABLED` so it
+        # 3) FatSecret text search — gated by `settings.FATSECRET_ENABLED` so it
         #    stays in the codebase as a fallback we can flip on without
         #    re-plumbing the chain. `is_fatsecret_configured()` is the second
         #    gate; together they keep the chain valid in dev with no creds.
@@ -225,13 +212,13 @@ async def lookup_food(
 ) -> FoodLookupResult:
     """Resolve a food's per-unit nutrition from the catalog or external sources.
 
-    Order: local PG cache (barcode then name/alias) → Open Food Facts (barcode
-    then brand-filtered text) → FatSecret (when `FATSECRET_ENABLED`). External
-    hits are cached back into the catalog. Returns `found=False` when no source
-    matches — call `estimate_food_nutrition` as the last resort.
+    Order: local PG cache (barcode then name/alias) → FatSecret text search
+    (when `FATSECRET_ENABLED`). External hits are cached back into the catalog.
+    Returns `found=False` when no source matches — call `estimate_food_nutrition`
+    as the last resort.
 
-    `strict=True` (used by the reflect-retry loop) skips fuzzy text search in
-    OFF and FatSecret to avoid repeating the same bad branded match.
+    `strict=True` (used by the reflect-retry loop) skips the fuzzy FatSecret
+    text search to avoid repeating the same bad branded match.
     """
     async with async_session_factory() as session:
         food = await resolve_food(session, name, barcode, brand=brand, strict=strict)

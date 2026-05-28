@@ -177,7 +177,7 @@ RULES
    bot will reprompt the user for the missing weight when this is False.
 9. NAME NORMALIZATION for bare nouns — when the user writes ONLY a generic
    noun without any cooking descriptor, expand `name` to the typical
-   diary-logging form so external lookup (Open Food Facts) gets a clean
+   diary-logging form so external lookup (FatSecret) gets a clean
    hit instead of random matches. Keep the user's number/weight as-is.
      - Grains/cereals (рис, гречка, овсянка, перловка, булгур, киноа,
        манка, пшено) → "<crop> отварной/отварная" (gender by Russian rule)

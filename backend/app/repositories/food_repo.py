@@ -62,18 +62,15 @@ async def search_foods_by_name(
     """Search local catalog by name OR aliases. Case-insensitive.
 
     Results are ordered by source trust — curated (hand-verified) wins over
-    OFF / LLM-estimate which historically have produced noisy text hits.
-    Without this, a garbage `off`-cached row like "лесной орех 🌰 сникерс"
-    could outrank the curated "Snickers".
+    FatSecret / LLM-estimate which historically have produced noisy text hits.
     """
     pattern = f"%{query.strip()}%"
     source_priority = case(
         (Food.source == FoodSource.CURATED, 0),
         (Food.source == FoodSource.USER_RECIPE, 1),
         (Food.source == FoodSource.FATSECRET, 2),
-        (Food.source == FoodSource.OPEN_FOOD_FACTS, 3),
-        (Food.source == FoodSource.CUSTOM, 4),
-        (Food.source == FoodSource.LLM_ESTIMATE, 5),
+        (Food.source == FoodSource.CUSTOM, 3),
+        (Food.source == FoodSource.LLM_ESTIMATE, 4),
         else_=99,
     )
     stmt = (
