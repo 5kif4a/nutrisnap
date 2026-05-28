@@ -1,14 +1,16 @@
 """nutrition_fetch_node — resolve KBJU for parsed items via the Nutrition MCP.
 
-For every parsed item this node calls the custom Nutrition MCP server's tools
-(over the MCP protocol, see `app.mcp`) rather than the repositories directly:
+For every parsed item this node fires a single MCP call —
+`resolve_meal_item` — which runs the full pipeline server-side (catalog
+lookup → LLM-estimate fallback → portion math) and returns absolute KBJU
+ready to drop into a MealItem. The atomic tools (`lookup_food`,
+`estimate_food_nutrition`, `compute_meal_item_nutrition`) stay registered on
+the MCP server for external clients and unit tests, but the graph itself
+makes one round-trip per item instead of three.
 
-    lookup_food → (if not found) estimate_food_nutrition → compute_meal_item_nutrition
-
-The MCP tools own the source-priority chain, the FatSecret/strict gating and the
-LLM-fallback policy (branded-item refusal + Atwater plausibility); this node just
-orchestrates the tools, propagates `reflect_strict` for the reflect-retry loop,
-and shapes the result into a MealItem snapshot.
+`reflect_strict` is propagated to the MCP tool so the reflect-retry loop can
+ask the server to skip fuzzy text matches (FatSecret) — barcode + local PG +
+LLM estimate still run.
 """
 
 from __future__ import annotations
@@ -32,12 +34,9 @@ async def nutrition_fetch_node(state: GraphState) -> GraphState:
     items = state.get("parsed_items") or []
     if not items:
         state["resolved_items"] = []
+        state["error"] = "nothing resolved"
         return state
 
-    # `reflect` toggles this on retry: skip fuzzy OFF/FatSecret text matches
-    # and lean on barcode + local PG + LLM-estimate path. Keeps obvious branded
-    # mismatches (e.g. "Nuts 66" → wrong nut-butter row from OFF) from coming
-    # back a second time. The MCP `lookup_food` tool honours this flag.
     strict = bool(state.get("reflect_strict"))
 
     # Resolve sequentially — items count is small (2-5/meal) and latency is
@@ -49,72 +48,50 @@ async def nutrition_fetch_node(state: GraphState) -> GraphState:
             resolved.append(r)
 
     state["resolved_items"] = resolved
+    # Set the error tag here, not in the routing function — LangGraph drops
+    # state mutations performed inside conditional-edge callbacks.
+    if not resolved:
+        state["error"] = "nothing resolved"
     return state
 
 
 async def _resolve_one_item(
     item: ParsedFoodItem, *, strict: bool = False
 ) -> ResolvedItem | None:
-    food = await call_mcp_tool(
-        "lookup_food",
+    result = await call_mcp_tool(
+        "resolve_meal_item",
         {
             "name": item.name,
-            "barcode": item.barcode,
+            "amount": item.amount,
+            "unit": item.unit.value,
             "brand": item.brand,
+            "barcode": item.barcode,
             "strict": strict,
         },
     )
-    if not food.get("found"):
-        # No source matched — try the LLM estimate tool (ephemeral). The tool
-        # refuses branded items and rejects implausible macros itself, so a
-        # `found=False` here is a real "skip this item" signal.
-        food = await call_mcp_tool(
-            "estimate_food_nutrition", {"name": item.name, "brand": item.brand}
-        )
-        if not food.get("found"):
-            logger.warning(
-                "Could not resolve food for '%s' (brand=%s) — %s",
-                item.name,
-                item.brand,
-                food.get("reason") or "no match",
-            )
-            return None
-
-    nutrition = await call_mcp_tool(
-        "compute_meal_item_nutrition",
-        {
-            "metric": food["metric"],
-            "kcal": food["kcal"],
-            "protein_g": food["protein_g"],
-            "fat_g": food["fat_g"],
-            "carbs_g": food["carbs_g"],
-            "piece_weight_g": food.get("piece_weight_g"),
-            "amount": item.amount,
-            "unit": item.unit.value,
-        },
-    )
-    if not nutrition.get("ok"):
+    if not result.get("found"):
         logger.warning(
-            "Cannot compute nutrition for %s: %s", item.name, nutrition.get("error")
+            "Could not resolve food for '%s' (brand=%s) — %s",
+            item.name,
+            item.brand,
+            result.get("reason") or "no match",
         )
         return None
 
-    # Ephemeral (LLM-estimated) foods have food_id=None — store the MealItem
-    # snapshot with food_id=NULL so we never reference a non-existent row.
-    food_id = food.get("food_id")
+    food_id = result.get("food_id")
     payload = MealItemPayload(
-        food_name=food["name"],
+        food_name=result["food_name"],
         amount=item.amount,
         unit=item.unit,
-        weight_g=nutrition["weight_g"],
-        kcal=nutrition["kcal"],
-        protein_g=nutrition["protein_g"],
-        fat_g=nutrition["fat_g"],
-        carbs_g=nutrition["carbs_g"],
+        weight_g=result["weight_g"],
+        kcal=result["kcal"],
+        protein_g=result["protein_g"],
+        fat_g=result["fat_g"],
+        carbs_g=result["carbs_g"],
         food_id=UUID(food_id) if food_id else None,
     )
     return ResolvedItem(
         payload=payload,
-        source=FoodSource(food["source"]),
+        source=FoodSource(result["source"]),
         food_id_known=bool(food_id),
     )

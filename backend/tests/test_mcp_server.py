@@ -47,12 +47,13 @@ def _fake_estimate(**kw) -> NutritionEstimate:
     return NutritionEstimate(**defaults)
 
 
-async def test_registers_exactly_three_tools():
+async def test_registers_expected_tools():
     tools = await srv.mcp.list_tools()
     assert sorted(t.name for t in tools) == [
         "compute_meal_item_nutrition",
         "estimate_food_nutrition",
         "lookup_food",
+        "resolve_meal_item",
     ]
 
 

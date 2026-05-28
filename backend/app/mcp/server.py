@@ -1,13 +1,18 @@
 """NutriSnap Nutrition MCP server (stdio transport).
 
 Custom Model Context Protocol server exposing the food-resolution pipeline as
-three meaningful tools. The LangGraph `nutrition_fetch_node` is the in-app MCP
-client (see `app.mcp.client`); the same server also runs standalone for Claude
-Desktop / MCP Inspector.
+four tools. The LangGraph `nutrition_fetch_node` is the in-app MCP client (see
+`app.mcp.client`); the same server also runs standalone for Claude Desktop /
+MCP Inspector.
 
+    resolve_meal_item            — composite: lookup → estimate → portion math
     lookup_food                  — local cache → FatSecret chain (+ upsert)
     compute_meal_item_nutrition  — scale per-100g/piece macros to a portion
     estimate_food_nutrition      — gpt-4o-mini last-resort KBJU estimate
+
+`resolve_meal_item` is what the graph actually calls — one round-trip per item
+instead of three. The atomic tools stay public so external MCP clients (and
+unit tests) can still inspect each step.
 
 Run standalone:  uv run python -m app.mcp.server
 """
@@ -78,6 +83,26 @@ class NutritionResult(BaseModel):
     fat_g: float = 0.0
     carbs_g: float = 0.0
     error: str | None = None
+
+
+class MealItemResolution(BaseModel):
+    """End-to-end resolution for a parsed meal item: identity + portion KBJU.
+
+    Shape the LangGraph node consumes directly — no further math needed. When
+    `found=False` the caller drops the item and `reason` carries the cause for
+    logs / LangSmith.
+    """
+
+    found: bool
+    food_id: str | None = None
+    food_name: str = ""
+    weight_g: float = 0.0
+    kcal: float = 0.0
+    protein_g: float = 0.0
+    fat_g: float = 0.0
+    carbs_g: float = 0.0
+    source: FoodSource = FoodSource.LLM_ESTIMATE
+    reason: str | None = None
 
 
 # ─── Core logic (plain async fns — unit-testable without the MCP layer) ──────
@@ -201,6 +226,91 @@ def compute_portion_nutrition(
 
 
 # ─── MCP tools (thin wrappers over the logic above) ──────────────────────────
+
+
+@mcp.tool()
+async def resolve_meal_item(
+    name: str,
+    amount: float,
+    unit: FoodMetric,
+    brand: str | None = None,
+    barcode: str | None = None,
+    strict: bool = False,
+) -> MealItemResolution:
+    """Resolve a parsed item to absolute KBJU in one call.
+
+    Pipeline: local PG (barcode then name) → FatSecret (when enabled and
+    `strict=False`) → generic LLM estimate (brand dropped) → portion math.
+
+    Unlike the atomic `estimate_food_nutrition`, the LLM fallback here does
+    NOT refuse branded items — it strips the brand and estimates the generic
+    food. The Atwater plausibility check (kcal ≈ 4P + 9F + 4C, ±50%) catches
+    the cases where the model would hallucinate macros, so e.g. "Кефир 2.5%
+    Natige" resolves via the generic estimate while a true unknown like
+    "Maxler Ultra Whey" still gets rejected if the macros come back broken.
+    """
+    async with async_session_factory() as session:
+        food = await resolve_food(session, name, barcode, brand=brand, strict=strict)
+
+    metric = FoodMetric.GRAMS
+    piece_weight_g: float | None = None
+    food_id: str | None = None
+    food_name = name
+    source = FoodSource.LLM_ESTIMATE
+    kcal = protein_g = fat_g = carbs_g = 0.0
+
+    if food is not None:
+        food_id = str(food.id) if food.id is not None else None
+        food_name = food.name
+        metric = FoodMetric(food.metric)
+        kcal = food.kcal
+        protein_g = food.protein_g
+        fat_g = food.fat_g
+        carbs_g = food.carbs_g
+        piece_weight_g = food.piece_weight_g
+        source = FoodSource(food.source)
+    else:
+        estimate = await estimate_nutrition(name)
+        if not is_nutrition_plausible(estimate):
+            return MealItemResolution(
+                found=False,
+                reason=(
+                    f"implausible estimate (kcal={estimate.kcal} "
+                    f"P={estimate.protein_g} F={estimate.fat_g} C={estimate.carbs_g})"
+                ),
+            )
+        food_name = estimate.name
+        metric = FoodMetric(estimate.metric)
+        kcal = estimate.kcal
+        protein_g = estimate.protein_g
+        fat_g = estimate.fat_g
+        carbs_g = estimate.carbs_g
+        piece_weight_g = estimate.piece_weight_g
+
+    portion = compute_portion_nutrition(
+        metric=metric,
+        kcal=kcal,
+        protein_g=protein_g,
+        fat_g=fat_g,
+        carbs_g=carbs_g,
+        piece_weight_g=piece_weight_g,
+        amount=amount,
+        unit=unit,
+    )
+    if not portion.ok:
+        return MealItemResolution(found=False, reason=portion.error)
+
+    return MealItemResolution(
+        found=True,
+        food_id=food_id,
+        food_name=food_name,
+        weight_g=portion.weight_g,
+        kcal=portion.kcal,
+        protein_g=portion.protein_g,
+        fat_g=portion.fat_g,
+        carbs_g=portion.carbs_g,
+        source=source,
+    )
 
 
 @mcp.tool()

@@ -12,6 +12,7 @@ from functools import lru_cache
 from typing import Literal
 
 from langsmith import traceable
+from langsmith.wrappers import wrap_openai
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
@@ -99,7 +100,11 @@ class TextParseResult(BaseModel):
 
 @lru_cache(maxsize=1)
 def get_openai_client() -> AsyncOpenAI:
-    return AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    # wrap_openai instruments the SDK so each call shows up in LangSmith as an
+    # LLM-typed run with prompt/completion tokens — that's what powers the
+    # cost column. Without it @traceable still records the call but LangSmith
+    # has no usage metadata, so cost stays empty.
+    return wrap_openai(AsyncOpenAI(api_key=settings.OPENAI_API_KEY))
 
 
 # ─── Prompts ─────────────────────────────────────────────────────────────────

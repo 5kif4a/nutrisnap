@@ -55,4 +55,9 @@ async def analyze_photo_node(state: GraphState) -> GraphState:
     state["is_input_safe"] = True
     state["parsed_items"] = list(result.items)
     state["is_food_related"] = bool(result.items)
+    # Tag the error here (not in the conditional edge) — LangGraph drops
+    # mutations done inside routing callbacks, so error_node would otherwise
+    # fall through to the generic catch-all message.
+    if not result.items:
+        state["error"] = "nothing parsed"
     return state

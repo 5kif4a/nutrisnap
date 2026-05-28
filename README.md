@@ -246,7 +246,7 @@ nutrisnap/
 │   │   │   ├── qdrant.py      # singleton client, semantic search, auto-index hook
 │   │   │   └── ingest_foods.py# batch embed всего каталога
 │   │   ├── repositories/      # food_repo, meal_repo, user_repo
-│   │   ├── services/          # OpenAI, OFF, FatSecret, nutrition_calc, meal_drafts, recommendation_cache
+│   │   ├── services/          # OpenAI, FatSecret, nutrition_calc, meal_drafts, recommendation_cache
 │   │   ├── evals/
 │   │   │   ├── golden.jsonl   # 44 кейса (ТГ-сообщения + FatSecret-эталоны + edge)
 │   │   │   └── run.py         # runner с pass-rate + MAPE per macro

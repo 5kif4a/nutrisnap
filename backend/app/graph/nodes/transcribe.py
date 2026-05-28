@@ -31,4 +31,8 @@ async def transcribe_voice_node(state: GraphState) -> GraphState:
     state["transcribed_text"] = text
     # Feed the transcript into the text path so the parser handles it.
     state["text_input"] = text
+    # Tag empty STT here — LangGraph drops state mutations performed in the
+    # conditional-edge callback, so the routing function can only read.
+    if not text.strip():
+        state["error"] = "stt failed: empty"
     return state

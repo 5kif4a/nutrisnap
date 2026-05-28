@@ -59,14 +59,19 @@ from app.graph.nodes.vision import analyze_photo_node
 from app.graph.state import GraphState
 
 
+# Routing functions are pure: only inspect state, never mutate it. LangGraph
+# drops mutations performed inside conditional-edge callbacks (state updates
+# flow through node return values + channel reducers, not through this path),
+# so any `state["error"] = ...` here is silently lost before error_node runs.
+# The producing nodes set their own error tag.
+
+
 def _route_after_vision(state: GraphState) -> str:
     if state.get("error"):
         return "error"
     if state.get("is_input_safe") is False:
         return "error"
     if not state.get("parsed_items"):
-        # Vision returned no items even though the image was OK — tag and bail.
-        state["error"] = "nothing parsed"
         return "error"
     return "nutrition_lookup"
 
@@ -75,7 +80,6 @@ def _route_after_transcribe(state: GraphState) -> str:
     if state.get("error"):
         return "error"
     if not (state.get("transcribed_text") or "").strip():
-        state["error"] = "stt failed: empty"
         return "error"
     return "guiderail"
 
@@ -91,7 +95,6 @@ def _route_after_parse(state: GraphState) -> str:
         return "error"
     items = state.get("parsed_items") or []
     if not items:
-        state["error"] = "nothing parsed"
         return "error"
     # If the user wrote a noun without a weight ("рис"), the parser flagged it
     # — ask the user to retype with grams instead of guessing at a portion.
@@ -102,7 +105,6 @@ def _route_after_parse(state: GraphState) -> str:
 
 def _route_after_lookup(state: GraphState) -> str:
     if not state.get("resolved_items"):
-        state["error"] = "nothing resolved"
         return "error"
     return "reflect"
 

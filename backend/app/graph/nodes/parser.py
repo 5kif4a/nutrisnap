@@ -87,4 +87,8 @@ async def parse_text_node(state: GraphState) -> GraphState:
     # we couldn't parse), so the bot says "couldn't recognize" instead of
     # "I'm only for diary" — better UX for parsing fails.
     state["is_food_related"] = bool(items) or not _looks_like_non_food(text)
+    # Tag the error tag here (not in the routing function) — LangGraph drops
+    # mutations done inside conditional-edge callbacks.
+    if not items:
+        state["error"] = "nothing parsed"
     return state
