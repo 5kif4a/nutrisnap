@@ -56,7 +56,7 @@ async def handle_today_command(
 ) -> None:
     if update.effective_message is None:
         return
-    # TODO: реальная сводка из БД через get_daily_summary MCP tool
+    # TODO: реальная сводка из БД через meal_repo.fetch_daily_summary
     await update.effective_message.reply_text(
         "📅 Сводка за сегодня будет здесь (скоро)"
     )

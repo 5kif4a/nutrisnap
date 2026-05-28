@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.graph.graph import get_meal_graph
+from app.mcp.client import start_nutrition_mcp, stop_nutrition_mcp
 
 GOLDEN_PATH = Path(__file__).parent / "golden.jsonl"
 PASS_TOLERANCE = 0.10  # ±10% per macro counts as pass
@@ -316,10 +317,16 @@ async def main() -> None:
         cases = cases[: args.limit]
     graph = get_meal_graph()
 
-    results: list[CaseResult] = []
-    for i, case in enumerate(cases, 1):
-        print(f"[{i}/{len(cases)}] {case['input'][:60]!r}", file=sys.stderr)
-        results.append(await _run_one(graph, case))
+    # The graph's nutrition node talks to the Nutrition MCP server, which only
+    # the FastAPI lifespan normally starts — bring it up for the standalone run.
+    await start_nutrition_mcp()
+    try:
+        results: list[CaseResult] = []
+        for i, case in enumerate(cases, 1):
+            print(f"[{i}/{len(cases)}] {case['input'][:60]!r}", file=sys.stderr)
+            results.append(await _run_one(graph, case))
+    finally:
+        await stop_nutrition_mcp()
 
     report = _render_markdown(results)
     if args.output:

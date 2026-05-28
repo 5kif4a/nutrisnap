@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router as api_router
 from app.bot.application import build_telegram_application, process_telegram_update
 from app.core.config import settings
+from app.mcp.client import start_nutrition_mcp, stop_nutrition_mcp
 
 logging.basicConfig(
     level=logging.INFO,
@@ -19,6 +20,9 @@ logger = logging.getLogger("nutrisnap")
 async def lifespan(fastapi_app: FastAPI):
     telegram_app = build_telegram_application()
     fastapi_app.state.telegram_app = telegram_app
+
+    # Spawn the custom Nutrition MCP server and load its tools for the graph.
+    await start_nutrition_mcp()
 
     await telegram_app.initialize()
     await telegram_app.start()
@@ -44,6 +48,7 @@ async def lifespan(fastapi_app: FastAPI):
             await telegram_app.bot.delete_webhook()
         await telegram_app.stop()
         await telegram_app.shutdown()
+        await stop_nutrition_mcp()
 
 
 app = FastAPI(title="NutriSnap API", lifespan=lifespan)

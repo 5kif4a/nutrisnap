@@ -18,7 +18,7 @@ Telegram-бот + Mini App для дневника питания с AI-ввод
 | Vector DB | Qdrant (RAG + опционально семантический кэш) |
 | Embeddings | text-embedding-3-small |
 | Trace | LangSmith |
-| MCP | Python MCP SDK (nutrition server, 4 tools) |
+| MCP | Python MCP SDK (nutrition server, 3 tools) |
 | Frontend | React + Vite + TypeScript + Tailwind + shadcn/ui |
 | Mini App | @telegram-apps/sdk-react + @telegram-apps/telegram-ui |
 | Deploy | Railway (backend + db + qdrant), Vercel (frontend) |
