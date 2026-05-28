@@ -49,6 +49,16 @@ export function monthLabel(ym: string): string {
 }
 
 /**
+ * Seven ISO dates (Monday → Sunday) for the week containing `iso`.
+ * Crosses month boundaries when needed.
+ */
+export function weekGrid(iso: string): string[] {
+  const d = new Date(`${iso}T00:00:00Z`);
+  const dow = (d.getUTCDay() + 6) % 7; // 0 = Monday
+  return Array.from({ length: 7 }, (_, i) => shiftDayISO(iso, i - dow));
+}
+
+/**
  * Monday-first grid for a month: leading `null`s pad the first week so day 1
  * lands under its weekday. Length is a multiple of 7.
  */

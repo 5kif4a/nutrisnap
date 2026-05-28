@@ -11,10 +11,7 @@ import {
 } from "react-hook-form";
 import { api } from "../lib/api";
 import { useToast } from "../lib/toast";
-import {
-  profileFormSchema,
-  type ProfileFormValues,
-} from "../schemas/profile";
+import { profileFormSchema, type ProfileFormValues } from "../schemas/profile";
 import { greetingName } from "../telegram";
 import type {
   ActivityLevel,
@@ -107,10 +104,11 @@ export function Profile() {
         setProfile(p);
         reset(profileToForm(p));
       })
-      .catch((e) =>
-        toast.error("Не удалось загрузить профиль", (e as Error).message),
-      );
-    // toast / reset are stable refs → safe to leave out
+      .catch(() => {
+        // Suppressed for now — form just stays on DEFAULT_VALUES if the
+        // backend can't load the profile.
+      });
+    // reset is a stable ref → safe to leave out
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -147,7 +145,7 @@ export function Profile() {
   return (
     <form
       onSubmit={handleSubmit(onSubmit)}
-      className="mx-auto max-w-md px-4 pb-32 pt-4"
+      className="mx-auto max-w-md px-4 pb-32 pt-16"
       noValidate
     >
       {/* Greeting + computed daily targets card. */}
@@ -348,9 +346,7 @@ export function Profile() {
               : "Сохранить и пересчитать норму"}
       </button>
 
-      {formulaOpen && (
-        <FormulaSheet onClose={() => setFormulaOpen(false)} />
-      )}
+      {formulaOpen && <FormulaSheet onClose={() => setFormulaOpen(false)} />}
     </form>
   );
 }
@@ -468,11 +464,18 @@ function Toggle({ on }: { on: boolean }) {
     <span
       role="presentation"
       className="relative inline-block h-7 w-12 shrink-0 rounded-full transition"
-      style={{ background: on ? "var(--accent)" : "rgba(255,255,255,0.12)" }}
+      style={{
+        // iOS-style neutral grey for the off state — readable on both light
+        // and dark Telegram themes (white-on-light was invisible before).
+        background: on ? "var(--accent)" : "rgba(120, 120, 128, 0.32)",
+      }}
     >
       <span
-        className="absolute top-0.5 h-6 w-6 rounded-full bg-white shadow-sm transition-all"
-        style={{ left: on ? "22px" : "2px" }}
+        className="absolute top-0.5 h-6 w-6 rounded-full bg-white transition-all"
+        style={{
+          left: on ? "22px" : "2px",
+          boxShadow: "0 2px 4px rgba(0, 0, 0, 0.25)",
+        }}
       />
     </span>
   );
@@ -655,14 +658,14 @@ function FormulaSheet({ onClose }: { onClose: () => void }) {
               Распределение БЖУ
             </div>
             <p className="text-[13px]">
-              Белки 30% · Жиры 25% · Углеводы 45% от РСК. Калорийность:
-              1 г белка = 4 ккал, 1 г жиров = 9 ккал, 1 г углеводов = 4 ккал.
+              Белки 30% · Жиры 25% · Углеводы 45% от РСК. Калорийность: 1 г
+              белка = 4 ккал, 1 г жиров = 9 ккал, 1 г углеводов = 4 ккал.
             </p>
           </div>
 
           <p className="text-xs text-tg-hint">
-            Формула — ориентир. Если знаешь свою норму точнее (анализы,
-            тренер) — переключи «вручную» сверху и впиши свои числа.
+            Формула — ориентир. Если знаешь свою норму точнее (анализы, тренер)
+            — переключи «вручную» сверху и впиши свои числа.
           </p>
         </div>
       </div>

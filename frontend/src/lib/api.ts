@@ -81,7 +81,9 @@ export const api = {
     }),
 };
 
-function buildQuery(params: Record<string, string | number | undefined>): string {
+function buildQuery(
+  params: Record<string, string | number | undefined>,
+): string {
   const entries = Object.entries(params).filter(
     ([, v]) => v !== undefined && v !== null,
   );

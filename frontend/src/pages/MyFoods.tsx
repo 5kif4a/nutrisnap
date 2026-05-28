@@ -34,7 +34,6 @@ export function MyFoods() {
   const [searchResults, setSearchResults] = useState<QuickAddFoodOut[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [busyName, setBusyName] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -43,20 +42,22 @@ export function MyFoods() {
     let cancelled = false;
     const load = async () => {
       setLoading(true);
-      setError(null);
       try {
         const [rec, freq] = await Promise.all([
           api.getRecentFoods({ mealType, limit: 20 }),
           api.getFrequentFoods({ mealType, limit: 20 }),
         ]);
         if (cancelled) return;
-        setRecent(rec);
         // De-dup recents that also appear in frequent.
         const freqNames = new Set(freq.map((f) => f.food_name.toLowerCase()));
         setRecent(rec.filter((r) => !freqNames.has(r.food_name.toLowerCase())));
         setFrequent(freq);
-      } catch (e) {
-        if (!cancelled) setError((e as Error).message);
+      } catch {
+        // Backend hiccup — show the empty-state copy instead of an error wall.
+        if (!cancelled) {
+          setRecent([]);
+          setFrequent([]);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -78,12 +79,12 @@ export function MyFoods() {
     let cancelled = false;
     const t = setTimeout(async () => {
       setLoading(true);
-      setError(null);
       try {
         const rows = await api.searchFoods({ q, limit: 25 });
         if (!cancelled) setSearchResults(rows);
-      } catch (e) {
-        if (!cancelled) setError((e as Error).message);
+      } catch {
+        // Backend hiccup — fall through to the "nothing found" empty-state.
+        if (!cancelled) setSearchResults([]);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -121,7 +122,9 @@ export function MyFoods() {
             api.getFrequentFoods({ mealType, limit: 20 }),
           ]);
           const freqNames = new Set(freq.map((f) => f.food_name.toLowerCase()));
-          setRecent(rec.filter((r) => !freqNames.has(r.food_name.toLowerCase())));
+          setRecent(
+            rec.filter((r) => !freqNames.has(r.food_name.toLowerCase())),
+          );
           setFrequent(freq);
         }
       } catch (e) {
@@ -154,9 +157,9 @@ export function MyFoods() {
   }, [tab, loading, searchQuery]);
 
   return (
-    <div className="mx-auto max-w-md px-4 pb-32 pt-4">
-      {/* Header — meal-type selector. Right padding keeps the global gear icon free. */}
-      <div className="mb-3 pr-12">
+    <div className="mx-auto max-w-md px-4 pb-32 pt-16">
+      {/* Header — meal-type selector. */}
+      <div className="mb-3">
         <div className="flex gap-1.5 overflow-x-auto rounded-2xl bg-tg-card p-1 shadow-sm">
           {MEAL_TYPES.map((m) => {
             const selected = mealType === m.v;
@@ -223,12 +226,6 @@ export function MyFoods() {
               <X size={18} />
             </button>
           )}
-        </div>
-      )}
-
-      {error && (
-        <div className="mb-3 rounded-xl bg-red-100 p-3 text-sm text-red-700">
-          {error}
         </div>
       )}
 

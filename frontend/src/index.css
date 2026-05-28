@@ -88,6 +88,17 @@ body::before {
   box-shadow: var(--glass-shadow);
 }
 
+/* Softer variant — same glass surface with a gentler shadow.
+   Use for small inline controls (top-bar icon buttons, date-nav chevrons)
+   where the full nav-pill shadow reads as too heavy. */
+.liquid-glass-soft {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
+  backdrop-filter: saturate(180%) blur(24px);
+  border: 1px solid var(--glass-stroke);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
 /* Bottom-sheet slide-in / backdrop-fade — used by FormulaSheet. */
 @keyframes sheet-slide-up {
   from {

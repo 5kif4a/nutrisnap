@@ -12,7 +12,7 @@ interface Props {
   onChange: (tab: Tab) => void;
 }
 
-/** Three visible tabs — "profile" is reachable via the global gear icon. */
+/** Three visible tabs — "profile" is reachable via the global person icon. */
 const TABS: { id: Tab; label: string; Icon: LucideIcon }[] = [
   { id: "foods", label: "Продукты", Icon: Apple },
   { id: "dashboard", label: "Дневник", Icon: LayoutDashboard },
@@ -31,7 +31,7 @@ export function TabBar({ active, onChange }: Props) {
       className="fixed inset-x-0 bottom-0 z-50 flex justify-center pb-[max(env(safe-area-inset-bottom),12px)]"
       aria-label="Основная навигация"
     >
-      <div className="liquid-glass mx-4 flex w-full max-w-sm items-center justify-around rounded-full px-2 py-2">
+      <div className="liquid-glass flex w-auto max-w-[88vw] items-center gap-1 rounded-full px-1.5 py-1.5">
         {TABS.map(({ id, label, Icon }) => {
           const selected = effective === id;
           return (
@@ -40,14 +40,14 @@ export function TabBar({ active, onChange }: Props) {
               onClick={() => onChange(id)}
               aria-label={label}
               aria-current={selected ? "page" : undefined}
-              className="flex flex-1 flex-col items-center gap-0.5 rounded-full px-3 py-1.5 transition active:scale-95"
+              className="flex flex-col items-center gap-0.5 rounded-full px-3 py-1 transition active:scale-95"
               style={{
                 color: selected ? "var(--accent)" : "var(--tg-hint)",
                 background: selected ? "var(--accent-soft)" : "transparent",
               }}
             >
               <Icon
-                size={22}
+                size={20}
                 strokeWidth={selected ? 2.4 : 2}
                 aria-hidden="true"
               />

@@ -79,11 +79,7 @@ export function applyTheme(): void {
   set("--tg-link", params.link_color, "#5b8def");
   set("--tg-button", params.button_color, "#5b8def");
   set("--tg-button-text", params.button_text_color, "#ffffff");
-  set(
-    "--tg-border",
-    undefined,
-    dark ? "rgba(255,255,255,0.06)" : "#e5e7eb",
-  );
+  set("--tg-border", undefined, dark ? "rgba(255,255,255,0.06)" : "#e5e7eb");
   // Glass surface tokens — depend on bg theme.
   set(
     "--glass-bg",
